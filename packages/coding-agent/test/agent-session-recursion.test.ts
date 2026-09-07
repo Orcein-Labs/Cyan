@@ -23,7 +23,7 @@ import { AuthStorage } from "../src/core/auth-storage.js";
 import { computeOwnAndTotalUsage } from "../src/core/context-tree.js";
 import type { LoadExtensionsResult } from "../src/core/extensions/index.js";
 import { type HostRequestHandlers, ReplKernelManager } from "../src/core/kernel/index.js";
-import { convertToLlm } from "../src/core/messages.js";
+import { ASYNC_BASH_COMPLETION_CUSTOM_TYPE, convertToLlm } from "../src/core/messages.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import {
 	createDefaultRlmSubagentSessionName,
@@ -864,6 +864,33 @@ describe("AgentSession rlm recursion", () => {
 		// Context tokens from the child's own assistant usage (input 7 + output 3); no tools ran.
 		expect(doneUpdate?.tokenCount).toBe(10);
 		expect(doneUpdate?.toolUseCount).toBeUndefined();
+	});
+
+	it("wakes the agent with a follow-up when a detached bash handle completes", async () => {
+		const prompts: string[] = [];
+		const root = createSession({
+			streamFn: (_model, context) => {
+				prompts.push(userText(context));
+				return streamAnswer("checked shell result");
+			},
+		});
+		const handlers = (root as unknown as InspectableRlmSession)._createKernelHostHandlers();
+		const completed = handlers["bash.completed"];
+		if (!completed) throw new Error("Missing bash.completed host handler");
+
+		await expect(completed({ pid: 42, command: "npm test", exitCode: 1 })).resolves.toEqual({});
+		await root.waitForIdle();
+
+		expect(prompts).toEqual([
+			expect.stringContaining("Inspect the saved BashHandle with .poll(), .output(), or .tail()"),
+		]);
+		expect(root.messages).toContainEqual(
+			expect.objectContaining({
+				role: "custom",
+				customType: ASYNC_BASH_COMPLETION_CUSTOM_TYPE,
+				details: { pid: 42, command: "npm test", exitCode: 1 },
+			}),
+		);
 	});
 
 	it("marks an in-cell roled send to the parent as replied", async () => {
@@ -3111,6 +3138,117 @@ describe("AgentSession rlm recursion", () => {
 			"RLM recursion depth limit reached (RLM_DEPTH=0, RLM_MAX_DEPTH=0)",
 		);
 		expect(child.rlmMaxDepth).toBe(3);
+	});
+
+	it("creates an independent root session through the explicit daemon host operation", async () => {
+		const createRlmSubagentRuntime = vi.fn(async () => {
+			throw new Error("unexpected child spawn");
+		});
+		const createRlmRootSession = vi.fn(async () => ({
+			active_session_id: "root-active",
+			session_id: "root-session",
+			name: "researcher",
+			session_file: join(tempDir, "sessions", "root-session.jsonl"),
+			model: `${model.provider}/${model.id}`,
+		}));
+		const assertSessionNameAvailable = vi.fn();
+		const root = createSession({
+			agentMessageController: {
+				assertSessionNameAvailable,
+				listAgents: async () => ({
+					current: { activeSessionId: "current-root", sessionId: "current-session" },
+					agents: [],
+				}),
+				sendAgentMessage: async () => {
+					throw new Error("unexpected message");
+				},
+			},
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime,
+				createRlmRootSession,
+				deleteRlmSubagentRuntime: vi.fn(async () => {}),
+			},
+		});
+
+		await expect(
+			root.createRlmSession("independent task", {
+				name: "researcher",
+				model: `${model.provider}/${model.id}`,
+				thinking: "off",
+				cwd: "other-project",
+			}),
+		).resolves.toEqual({
+			active_session_id: "root-active",
+			session_id: "root-session",
+			name: "researcher",
+			session_file: join(tempDir, "sessions", "root-session.jsonl"),
+			model: `${model.provider}/${model.id}`,
+		});
+		expect(createRlmSubagentRuntime).not.toHaveBeenCalled();
+		expect(assertSessionNameAvailable).toHaveBeenCalledWith({ name: "researcher", depth: 0 });
+		expect(createRlmRootSession).toHaveBeenCalledWith({
+			prompt: "independent task",
+			sessionName: "researcher",
+			cwd: join(tempDir, "other-project"),
+			model,
+			thinkingLevel: "off",
+		});
+		await expect(root.createRlmSession("task", { cwd: " " })).rejects.toThrow(
+			"rlm.create_session cwd must be a non-empty string",
+		);
+		await expect(root.createRlmSession(" ")).rejects.toThrow("rlm.create_session prompt must not be empty");
+		expect(createRlmRootSession).toHaveBeenCalledOnce();
+	});
+
+	it("does not create a root session after disposal during name preflight", async () => {
+		let releaseName: () => void = () => {};
+		const nameGate = new Promise<void>((resolve) => {
+			releaseName = resolve;
+		});
+		const createRlmRootSession = vi.fn(async () => ({
+			active_session_id: "new-root",
+			session_id: "new-session",
+			name: "researcher",
+			session_file: join(tempDir, "new-session.jsonl"),
+			model: `${model.provider}/${model.id}`,
+		}));
+		const root = createSession({
+			agentMessageController: {
+				assertSessionNameAvailable: () => nameGate,
+				listAgents: async () => ({ current: { activeSessionId: "root", sessionId: "session" }, agents: [] }),
+				sendAgentMessage: vi.fn(),
+			},
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime: vi.fn(),
+				createRlmRootSession,
+				deleteRlmSubagentRuntime: vi.fn(),
+			},
+		});
+		const creating = root.createRlmSession("independent task", { name: "researcher" });
+		root.dispose();
+		releaseName();
+		await expect(creating).rejects.toThrow("disposed");
+		expect(createRlmRootSession).not.toHaveBeenCalled();
+	});
+
+	it("keeps top-level session creation unavailable to nested or inline sessions", async () => {
+		const createRlmRootSession = vi.fn();
+		const nested = createSession({
+			depth: 1,
+			subagentRuntimeHost: {
+				createRlmSubagentRuntime: vi.fn(),
+				createRlmRootSession,
+				deleteRlmSubagentRuntime: vi.fn(async () => {}),
+			},
+		});
+		await expect(nested.createRlmSession("escape to root")).rejects.toThrow("available only from a depth-0 session");
+		expect(createRlmRootSession).not.toHaveBeenCalled();
+		nested.dispose();
+
+		const inline = createSession();
+		await expect(inline.createRlmSession("detached root")).rejects.toThrow(
+			"requires a daemon-backed depth-0 session",
+		);
 	});
 
 	it("rejects child creation at the configured recursion depth cap", async () => {
