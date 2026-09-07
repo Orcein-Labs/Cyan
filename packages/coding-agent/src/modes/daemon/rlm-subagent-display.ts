@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomicSync } from "../../utils/atomic-file.js";
@@ -52,10 +52,32 @@ function isRlmSubagentDisplayEntry(value: unknown): value is RlmSubagentDisplayE
 	);
 }
 
-export function writeRlmSubagentDisplayEntry(entry: RlmSubagentDisplayEntry): void {
+function readRlmSubagentDisplayEntrySync(sessionDir: string): RlmSubagentDisplayEntry | undefined {
+	let contents: string;
+	try {
+		contents = readFileSync(rlmSubagentDisplayPath(sessionDir), "utf8");
+	} catch (error) {
+		// An unreadable file may hold a deletion tombstone.
+		if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+		throw error;
+	}
+	try {
+		const parsed = JSON.parse(contents) as unknown;
+		return isRlmSubagentDisplayEntry(parsed) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// The daemon supervisor owns all writes synchronously, so the check and rename cannot interleave.
+export function writeRlmSubagentDisplayEntry(entry: RlmSubagentDisplayEntry): boolean {
 	const path = rlmSubagentDisplayPath(entry.sessionDir);
+	if (entry.status !== "deleted" && readRlmSubagentDisplayEntrySync(entry.sessionDir)?.status === "deleted") {
+		return false;
+	}
 	mkdirSync(entry.sessionDir, { recursive: true });
 	writeFileAtomicSync(path, `${JSON.stringify(entry)}\n`, { mode: 0o600, fsync: true });
+	return true;
 }
 
 export async function readRlmSubagentDisplayEntry(

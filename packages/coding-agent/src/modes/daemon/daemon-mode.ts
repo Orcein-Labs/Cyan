@@ -6,7 +6,6 @@
  * disposing the underlying agent loop.
  */
 
-import { spawn } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -108,7 +107,7 @@ import {
 import { resolveSessionPath } from "../../core/session-resolver.js";
 import type { SessionStats } from "../../core/session-stats.js";
 import { type SideQuestionRun, startSideQuestion } from "../../core/side-question.js";
-import { isProcessAlive } from "../../utils/child-process.js";
+import { isProcessAlive, spawnHidden } from "../../utils/child-process.js";
 import { tryAcquireDirLock } from "../../utils/dir-lock.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
 import {
@@ -875,7 +874,7 @@ export class AgentDaemon {
 			delete environment[ORPHAN_PROCESS_JOURNAL_ENV];
 			delete environment[SESSION_LEASES_ENABLED_ENV];
 			delete environment[SESSION_LEASE_OWNER_ID_ENV];
-			const child = spawn(launch.command, launch.args, {
+			const child = spawnHidden(launch.command, launch.args, {
 				cwd: this.options.defaultSessionConfig.cwd ?? process.cwd(),
 				detached: true,
 				env: environment,
@@ -1036,7 +1035,7 @@ export class AgentDaemon {
 			this.pendingRlmSpawnAppends.set(`${parentState.activeSessionId}#${input.childId}`, spawnAppend);
 		}
 		try {
-			writeRlmSubagentDisplayEntry({
+			const written = writeRlmSubagentDisplayEntry({
 				type: "rlm_subagent",
 				childId: input.childId,
 				sessionName: input.sessionName,
@@ -1047,7 +1046,10 @@ export class AgentDaemon {
 				createdAt: input.createdAt ?? Date.now(),
 				updatedAt: new Date().toISOString(),
 			});
-			return true;
+			if (!written) {
+				this.log(`skipped RLM subagent display entry for ${input.childId}: deleted tombstone exists`);
+			}
+			return written;
 		} catch (error) {
 			this.log(
 				`failed to persist RLM subagent display entry: ${error instanceof Error ? error.message : String(error)}`,
@@ -1079,8 +1081,28 @@ export class AgentDaemon {
 		} else if (edges.length > 0) {
 			// Only tombstoned edges: the tombstones are already durable, nothing
 			// to re-append. A prior deletion may have crashed before its artifact
-			// sweep, so retry it here.
+			// sweep. Restore the display tombstone before sweeping artifacts.
 			for (const tombstoned of edges) {
+				try {
+					const currentDisplay = await readRlmSubagentDisplayEntry(dirname(tombstoned.child));
+					if (!currentDisplay || currentDisplay.status !== "deleted") {
+						writeRlmSubagentDisplayEntry({
+							type: "rlm_subagent",
+							childId,
+							sessionName: currentDisplay?.sessionName ?? tombstoned.name,
+							sessionDir: dirname(tombstoned.child),
+							sessionFile: currentDisplay?.sessionFile ?? tombstoned.child,
+							...rlmSubagentMetadataFields(currentDisplay ?? {}),
+							status: "deleted",
+							createdAt: currentDisplay?.createdAt ?? 0,
+							updatedAt: new Date().toISOString(),
+						});
+					}
+				} catch {
+					// Best-effort: the ledger tombstone is the authority; the display
+					// file is display-grade and the sweep below will remove artifacts.
+					this.log(`failed to reconcile display entry for tombstoned RLM subagent ${childId}`);
+				}
 				await this.deleteRlmSubagentArtifacts(childId, tombstoned.child);
 			}
 			return;
@@ -5552,7 +5574,7 @@ export class AgentDaemon {
 		const client = new DaemonClient(supervisorSocketPath);
 		try {
 			await client.connect(1000);
-			await client.waitForHello(1000);
+			await client.waitForHello();
 			const response = await client.request(
 				{ type: "list_agent_peers", workerToken: this.options.worker.authenticationToken },
 				5000,
@@ -5756,7 +5778,7 @@ export class AgentDaemon {
 		const client = new DaemonClient(supervisorSocketPath);
 		try {
 			await client.connect(1000);
-			await client.waitForHello(1000);
+			await client.waitForHello();
 			const response = await client.request(
 				{
 					type: "set_session_name",
@@ -6056,7 +6078,7 @@ export class AgentDaemon {
 			const candidate = new DaemonClient(supervisorSocketPath);
 			try {
 				await candidate.connect(1000);
-				await candidate.waitForHello(1000);
+				await candidate.waitForHello();
 				client = candidate;
 				break;
 			} catch (error) {
