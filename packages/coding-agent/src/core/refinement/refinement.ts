@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../../config.js";
 import { realpathIfPresentSync, writeFileAtomicSync } from "../../utils/atomic-file.js";
@@ -9,6 +9,7 @@ import { serializeConversation } from "../compaction/utils.js";
 import { convertToLlm } from "../messages.js";
 import { completeWithProviderRetry, type ProviderRetryPolicy } from "../provider-retry.js";
 import type { CustomEntry } from "../session-manager.js";
+import { getAuxiliaryThinkingLevel } from "../thinking-levels.js";
 
 export const REFINEMENT_CUSTOM_TYPE = "prime-agent.refinement";
 
@@ -177,24 +178,59 @@ Return JSON only:
   "instructions": "optional concise instructions for /refine if shouldRefine is true"
 }`;
 
-/**
- * Output budgets are derived from the selected model instead of fixed literals.
- * /refine input scales with harness size (entry overview, refinement history, and
- * the trajectory slice), so a constant output cap silently truncates exactly the
- * large multi-edit proposals that matter most. Math.min keeps small models honest.
- */
+// These caps apply only with reasoning off; thinking and JSON otherwise share the model's output budget.
 const REFINEMENT_MAX_OUTPUT_TOKENS = 32_000;
 const AUTO_REFINE_REVIEW_MAX_OUTPUT_TOKENS = 4_096;
+const REFINEMENT_CONTEXT_OVERHEAD_TOKENS = 1_024;
 
 const TRUNCATED_JSON_ERROR =
 	"the model stopped before completing its JSON object. This usually means the output budget was exhausted; retry with a smaller request.";
 
-function refinementMaxOutputTokens(model: Model<any>): number {
-	return Math.min(model.maxTokens, REFINEMENT_MAX_OUTPUT_TOKENS);
+function refinementInputTokenBound(text: string): number {
+	// One token per UTF-8 byte bounds byte-based tokenizers, including dense or unusual text.
+	return Buffer.byteLength(text, "utf8");
 }
 
-function autoRefineReviewMaxOutputTokens(model: Model<any>): number {
-	return Math.min(model.maxTokens, AUTO_REFINE_REVIEW_MAX_OUTPUT_TOKENS);
+function refinementRequest(
+	model: Model<Api>,
+	systemPrompt: string,
+	conversationText: string,
+	buildPrompt: (conversation: string) => string,
+	outputReserve: number,
+): { model: Model<Api>; userPrompt: string } {
+	const systemReserve = refinementInputTokenBound(systemPrompt) + REFINEMENT_CONTEXT_OVERHEAD_TOKENS;
+	const inputBudget =
+		model.contextWindow - Math.min(model.maxTokens, outputReserve, Math.floor(model.contextWindow / 2));
+	let userPrompt = buildPrompt(conversationText);
+	if (systemReserve + refinementInputTokenBound(userPrompt) > inputBudget && conversationText.length > 0) {
+		const promptForLength = (length: number): string => {
+			let start = conversationText.length - length;
+			const first = conversationText.charCodeAt(start);
+			if (first >= 0xdc00 && first <= 0xdfff) start++;
+			return buildPrompt(
+				`[Earlier conversation omitted to fit the model context.]\n${conversationText.slice(start)}`,
+			);
+		};
+		let low = 0;
+		let high = conversationText.length;
+		while (low < high) {
+			const length = Math.ceil((low + high) / 2);
+			if (systemReserve + refinementInputTokenBound(promptForLength(length)) <= inputBudget) low = length;
+			else high = length - 1;
+		}
+		userPrompt = promptForLength(low);
+	}
+	const maxTokens = Math.min(
+		model.maxTokens,
+		model.contextWindow - systemReserve - refinementInputTokenBound(userPrompt),
+	);
+	if (maxTokens <= 0) {
+		throw new Error(
+			"Refinement prompt leaves no room for output in the model's context window; retry with a smaller request.",
+		);
+	}
+	// Bound the request's model ceiling too: some adapters add thinking tokens before clamping to it.
+	return { model: { ...model, maxTokens }, userPrompt };
 }
 
 function now(): string {
@@ -910,32 +946,43 @@ export async function planRefinement(
 	const scopeInstruction = options.global
 		? "Requested refinement scope: global. Only propose stable cross-session continual harness edits, durable user preferences, reusable skills/subagents, or explicitly project-qualified facts that should affect future Prime Agent sessions. Do not persist session-only progress, temporary blockers, or current-run coordination globally."
 		: "Requested refinement scope: local. Prefer local continual harness edits for current task progress, temporary blockers, current-run coordination, and project facts that are not clearly reusable across Prime Agent sessions. Global entries in the overview are read-only context: do not propose update or delete edits for them; create a local entry instead if an override is needed.";
-	const userPrompt = [
-		`<current_harness_state>\n${overviewForPrompt(state)}\n</current_harness_state>`,
-		`<refinement_history>\n${historyForPrompt(history)}\n</refinement_history>`,
-		`<conversation>\n${conversationText}\n</conversation>`,
-		`<scope_policy>\n${scopeInstruction}\n</scope_policy>`,
-		options.instructions ? `<user_refine_instructions>\n${options.instructions}\n</user_refine_instructions>` : "",
-		"Return only JSON edits. If no useful edit is justified, return an empty edits array with a rationale.",
-	]
-		.filter(Boolean)
-		.join("\n\n");
+	const buildPrompt = (conversation: string): string =>
+		[
+			`<current_harness_state>\n${overviewForPrompt(state)}\n</current_harness_state>`,
+			`<refinement_history>\n${historyForPrompt(history)}\n</refinement_history>`,
+			`<conversation>\n${conversation}\n</conversation>`,
+			`<scope_policy>\n${scopeInstruction}\n</scope_policy>`,
+			options.instructions ? `<user_refine_instructions>\n${options.instructions}\n</user_refine_instructions>` : "",
+			"Return only JSON edits. If no useful edit is justified, return an empty edits array with a rationale.",
+		]
+			.filter(Boolean)
+			.join("\n\n");
+	const reasoning = getAuxiliaryThinkingLevel(model, thinkingLevel);
+	const { model: requestModel, userPrompt } = refinementRequest(
+		model,
+		REFINEMENT_SYSTEM_PROMPT,
+		conversationText,
+		buildPrompt,
+		reasoning === "off" ? REFINEMENT_MAX_OUTPUT_TOKENS : model.maxTokens,
+	);
+	const maxTokens =
+		reasoning === "off" ? Math.min(requestModel.maxTokens, REFINEMENT_MAX_OUTPUT_TOKENS) : requestModel.maxTokens;
 
-	// /refine requires a parseable JSON object in the final text. Some reasoning-capable
-	// OpenAI-compatible models can spend the response on visible thinking and return no
-	// final text, which makes otherwise successful daemon /refine calls fail parsing.
-	// Keep the refinement request non-reasoning regardless of the interactive session
-	// thinking level so the model uses its output budget for the JSON object.
-	void thinkingLevel;
 	const response = await completeWithProviderRetry(
 		() =>
 			completeSimple(
-				model,
+				requestModel,
 				{
 					systemPrompt: REFINEMENT_SYSTEM_PROMPT,
 					messages: [{ role: "user", content: [{ type: "text", text: userPrompt }], timestamp: Date.now() }],
 				},
-				{ maxTokens: refinementMaxOutputTokens(model), signal, apiKey, headers },
+				{
+					reasoning,
+					maxTokens,
+					signal,
+					apiKey,
+					headers,
+				},
 			),
 		{ policy: options.retry, signal },
 	);
@@ -980,33 +1027,49 @@ export async function reviewAutoRefine(
 	retry?: ProviderRetryPolicy,
 ): Promise<AutoRefineReview> {
 	const conversationText = serializeConversation(convertToLlm(messages)).slice(-40_000);
-	const userPrompt = [
-		`<trigger>
+	const buildPrompt = (conversation: string): string =>
+		[
+			`<trigger>
 ${context.reason}; ${context.turnsSinceLastReview} assistant turns since last auto-refine review
 </trigger>`,
-		`<current_harness_state>
+			`<current_harness_state>
 ${overviewForPrompt(state)}
 </current_harness_state>`,
-		`<refinement_history>
+			`<refinement_history>
 ${historyForPrompt(history)}
 </refinement_history>`,
-		`<conversation>
-${conversationText}
+			`<conversation>
+${conversation}
 </conversation>`,
-		"Return shouldRefine=true when the trajectory contains evidence useful to this session's future turns. Prefer local harness edits for current task progress, temporary blockers, and current-run coordination. Ask for global refinement only for durable cross-session lessons or explicitly project-qualified facts likely to be reused in future sessions.",
-	].join("\n\n");
-	// Auto-refine review requires parseable JSON. Keep it non-reasoning so
-	// reasoning-capable models use final text budget for the JSON object.
-	void thinkingLevel;
+			"Return shouldRefine=true when the trajectory contains evidence useful to this session's future turns. Prefer local harness edits for current task progress, temporary blockers, and current-run coordination. Ask for global refinement only for durable cross-session lessons or explicitly project-qualified facts likely to be reused in future sessions.",
+		].join("\n\n");
+	const reasoning = getAuxiliaryThinkingLevel(model, thinkingLevel);
+	const { model: requestModel, userPrompt } = refinementRequest(
+		model,
+		AUTO_REFINE_REVIEW_SYSTEM_PROMPT,
+		conversationText,
+		buildPrompt,
+		reasoning === "off" ? AUTO_REFINE_REVIEW_MAX_OUTPUT_TOKENS : model.maxTokens,
+	);
+	const maxTokens =
+		reasoning === "off"
+			? Math.min(requestModel.maxTokens, AUTO_REFINE_REVIEW_MAX_OUTPUT_TOKENS)
+			: requestModel.maxTokens;
 	const response = await completeWithProviderRetry(
 		() =>
 			completeSimple(
-				model,
+				requestModel,
 				{
 					systemPrompt: AUTO_REFINE_REVIEW_SYSTEM_PROMPT,
 					messages: [{ role: "user", content: [{ type: "text", text: userPrompt }], timestamp: Date.now() }],
 				},
-				{ maxTokens: autoRefineReviewMaxOutputTokens(model), signal, apiKey, headers },
+				{
+					reasoning,
+					maxTokens,
+					signal,
+					apiKey,
+					headers,
+				},
 			),
 		{ policy: retry, signal },
 	);
