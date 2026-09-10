@@ -87,9 +87,12 @@ import {
 	addAutonomousUsage,
 	autonomousStatus,
 	createAutonomousRuntimeState,
+	isUnlimitedAutonomousLimit,
 	nextAutonomousContinuation,
 	refreshAutonomousQualityGates,
 	setAutonomousEnabled,
+	setAutonomousLimits,
+	UNLIMITED_AUTONOMOUS_LIMIT,
 } from "./autonomous.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
 import {
@@ -195,7 +198,7 @@ import {
 } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { throwIfPromptAdmissionCancelled } from "./prompt-admission.js";
-import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
+import { expandPromptTemplate, type PromptTemplate, parseCommandArgs } from "./prompt-templates.js";
 import {
 	isAgentLifecycleFailure,
 	isFauxProviderQueueExhausted,
@@ -919,7 +922,7 @@ type GoalSlashCommand =
 	| { kind: "resume" }
 	| { kind: "start"; objective: string; tokenBudget?: number };
 
-type AutonomousSlashCommand = { kind: "status" } | { kind: "on" } | { kind: "off" };
+type AutonomousSlashCommand = { kind: "status" } | { kind: "on"; config?: AgentAutonomousConfig } | { kind: "off" };
 
 import type { RlmMaxDepthSource, RlmMaxDepthStatus, SetRlmMaxDepthResult } from "./rlm-max-depth.js";
 
@@ -1032,6 +1035,111 @@ function parseGoalBudgetValue(value: string): number {
 		throw new Error("Goal token budget must be a positive integer.");
 	}
 	return budget;
+}
+
+const AUTONOMOUS_STATUS_NUMBER_FORMAT = new Intl.NumberFormat("en-US");
+
+const AUTONOMOUS_BUDGET_USAGE =
+	"Usage: /autonomous [status|off] or /autonomous on [--max-continuations <n|unlimited>] [--max-turns <n|unlimited>] [--max-tokens <n|unlimited>] [--timeout-ms <n|unlimited>] [--gate <command>] [--gate-retries <n>] [--gate-timeout-ms <n>]";
+
+// `/autonomous` budget flags mirror the `--autonomous-*` CLI options. The CLI
+// spelling (`--autonomous-max-continuations`) is accepted as an alias so the
+// exact CLI budget flags also work from the slash command.
+const AUTONOMOUS_BUDGET_FLAGS: ReadonlySet<string> = new Set([
+	"max-continuations",
+	"max-turns",
+	"max-tokens",
+	"timeout-ms",
+	"gate",
+	"gate-retries",
+	"gate-timeout-ms",
+]);
+
+function parseAutonomousBudgetInt(flag: string, value: string, allowUnlimited = false): number {
+	if (allowUnlimited && value.toLowerCase() === "unlimited") {
+		return UNLIMITED_AUTONOMOUS_LIMIT;
+	}
+	// Commas and underscores are accepted as digit separators (100,000,000).
+	const digits = value.replace(/[,_]/g, "");
+	if (!/^[1-9]\d*$/.test(digits)) {
+		throw new Error(
+			`--${flag} must be a positive integer${allowUnlimited ? ' or "unlimited"' : ""}. ${AUTONOMOUS_BUDGET_USAGE}`,
+		);
+	}
+	return Number(digits);
+}
+
+function parseAutonomousBudgetOptions(tokens: string[]): AgentAutonomousConfig {
+	const config: AgentAutonomousConfig = {};
+	const gateCommands: string[] = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		if (!token.startsWith("--")) {
+			throw new Error(`Unexpected autonomous argument: ${token}. ${AUTONOMOUS_BUDGET_USAGE}`);
+		}
+		const equalsIndex = token.indexOf("=");
+		const rawFlag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+		const inlineValue = equalsIndex === -1 ? undefined : token.slice(equalsIndex + 1);
+		const flag = rawFlag.startsWith("--autonomous-") ? rawFlag.slice("--autonomous-".length) : rawFlag.slice(2);
+		if (!AUTONOMOUS_BUDGET_FLAGS.has(flag)) {
+			throw new Error(`Unknown autonomous budget flag: ${rawFlag}. ${AUTONOMOUS_BUDGET_USAGE}`);
+		}
+		let value = inlineValue;
+		if (value === undefined) {
+			const next = tokens[i + 1];
+			if (next === undefined || next.startsWith("--")) {
+				throw new Error(`Missing value for ${rawFlag}. ${AUTONOMOUS_BUDGET_USAGE}`);
+			}
+			value = next;
+			i++;
+		}
+		if (value === "") {
+			throw new Error(`Missing value for ${rawFlag}. ${AUTONOMOUS_BUDGET_USAGE}`);
+		}
+		switch (flag) {
+			case "gate":
+				gateCommands.push(value);
+				break;
+			case "gate-retries":
+				config.gates = config.gates ?? {};
+				config.gates.maxRetries = parseAutonomousBudgetInt(flag, value);
+				break;
+			case "gate-timeout-ms":
+				config.gates = config.gates ?? {};
+				config.gates.timeoutMs = parseAutonomousBudgetInt(flag, value);
+				break;
+			case "max-continuations":
+				config.maxContinuations = parseAutonomousBudgetInt(flag, value, true);
+				break;
+			case "max-turns":
+				config.maxTurns = parseAutonomousBudgetInt(flag, value, true);
+				break;
+			case "max-tokens":
+				config.maxTokens = parseAutonomousBudgetInt(flag, value, true);
+				break;
+			case "timeout-ms":
+				config.timeoutMs = parseAutonomousBudgetInt(flag, value, true);
+				break;
+		}
+	}
+	if (gateCommands.length > 0) {
+		config.gates = { ...config.gates, commands: gateCommands };
+	}
+	// Named budget flags define the whole budget: any limit the user did not
+	// name stops cutting the run short. With no budget flags at all, the
+	// configured or default limits still apply.
+	if (
+		config.maxContinuations !== undefined ||
+		config.maxTurns !== undefined ||
+		config.maxTokens !== undefined ||
+		config.timeoutMs !== undefined
+	) {
+		config.maxContinuations ??= UNLIMITED_AUTONOMOUS_LIMIT;
+		config.maxTurns ??= UNLIMITED_AUTONOMOUS_LIMIT;
+		config.maxTokens ??= UNLIMITED_AUTONOMOUS_LIMIT;
+		config.timeoutMs ??= UNLIMITED_AUTONOMOUS_LIMIT;
+	}
+	return config;
 }
 
 export function compactRlmText(text: string, maxLength = 160): string {
@@ -2090,23 +2198,38 @@ export class AgentSession {
 	private _parseAutonomousSlashCommand(text: string): AutonomousSlashCommand | undefined {
 		const command = parseSessionSlashCommand(text);
 		if (command?.name !== "autonomous") return undefined;
-		const rest = command.args.toLowerCase();
-		if (!rest || rest === "status") {
+		const tokens = parseCommandArgs(command.args);
+		if (tokens.length === 0 || tokens[0]!.toLowerCase() === "status") {
+			if (tokens.length > 1) {
+				throw new Error(`Unexpected autonomous argument: ${tokens[1]}. ${AUTONOMOUS_BUDGET_USAGE}`);
+			}
 			return { kind: "status" };
 		}
-		if (rest === "on" || rest === "enable" || rest === "enabled") {
-			return { kind: "on" };
+		const subcommand = tokens[0]!.toLowerCase();
+		if (subcommand === "on" || subcommand === "enable" || subcommand === "enabled") {
+			return { kind: "on", config: parseAutonomousBudgetOptions(tokens.slice(1)) };
 		}
-		if (rest === "off" || rest === "disable" || rest === "disabled") {
+		if (subcommand === "off" || subcommand === "disable" || subcommand === "disabled") {
+			if (tokens.length > 1) {
+				throw new Error(`Unexpected autonomous argument: ${tokens[1]}. ${AUTONOMOUS_BUDGET_USAGE}`);
+			}
 			return { kind: "off" };
 		}
-		throw new Error("Usage: /autonomous [on|off|status]");
+		throw new Error(AUTONOMOUS_BUDGET_USAGE);
 	}
 
 	private _formatAutonomousStatus(): string {
 		const status = this.getAutonomousStatus();
 		const state = status.enabled ? "on" : "off";
-		return `[autonomous-status: ${state}]\n\nContinuations: ${status.continuationsUsed}/${status.limits.maxContinuations}. Turns: ${status.turnsUsed}/${status.limits.maxTurns}. Tokens: ${status.tokensUsed}/${status.limits.maxTokens}.`;
+		const elapsedSeconds = status.startedAt ? Math.round((Date.now() - status.startedAt) / 1000) : 0;
+		const gateSummary =
+			status.gates.commands.length > 0 ? status.gates.commands.map((command) => `"${command}"`).join(", ") : "none";
+		const formatCount = (value: number): string =>
+			isUnlimitedAutonomousLimit(value) ? "unlimited" : AUTONOMOUS_STATUS_NUMBER_FORMAT.format(value);
+		const timeBudget = isUnlimitedAutonomousLimit(status.limits.timeoutMs)
+			? "unlimited"
+			: `${AUTONOMOUS_STATUS_NUMBER_FORMAT.format(Math.round(status.limits.timeoutMs / 1000))}s`;
+		return `[autonomous-status: ${state}]\n\nContinuations: ${formatCount(status.continuationsUsed)}/${formatCount(status.limits.maxContinuations)}. Turns: ${formatCount(status.turnsUsed)}/${formatCount(status.limits.maxTurns)}. Tokens: ${formatCount(status.tokensUsed)}/${formatCount(status.limits.maxTokens)}. Time: ${elapsedSeconds}s/${timeBudget}. Gates: ${gateSummary}.`;
 	}
 
 	private _emitAutonomousStatus(): void {
@@ -2136,6 +2259,7 @@ export class AgentSession {
 		}
 		if (command.kind === "on") {
 			setAutonomousEnabled(this._autonomousState, true, { cwd: this._cwd });
+			setAutonomousLimits(this._autonomousState, command.config);
 		} else if (command.kind === "off") {
 			setAutonomousEnabled(this._autonomousState, false);
 			this._clearQueuedAutonomousContinuations();
