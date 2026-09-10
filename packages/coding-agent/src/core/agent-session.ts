@@ -2106,7 +2106,7 @@ export class AgentSession {
 	private _formatAutonomousStatus(): string {
 		const status = this.getAutonomousStatus();
 		const state = status.enabled ? "on" : "off";
-		return `Autonomous mode: ${state}. Continuations: ${status.continuationsUsed}/${status.limits.maxContinuations}. Turns: ${status.turnsUsed}/${status.limits.maxTurns}. Tokens: ${status.tokensUsed}/${status.limits.maxTokens}.`;
+		return `[autonomous-status: ${state}]\n\nContinuations: ${status.continuationsUsed}/${status.limits.maxContinuations}. Turns: ${status.turnsUsed}/${status.limits.maxTurns}. Tokens: ${status.tokensUsed}/${status.limits.maxTokens}.`;
 	}
 
 	private _emitAutonomousStatus(): void {
@@ -4771,7 +4771,7 @@ export class AgentSession {
 
 	async promptHeartbeat(job: AgentCronJob, options?: PromptOptions): Promise<void> {
 		const message = createHeartbeatPromptMessage(job);
-		await this._promptInjectedMessage(job.prompt, message, {
+		await this._promptInjectedMessage(message.content, message, {
 			...options,
 			followUpQueueKey: options?.followUpQueueKey ?? `heartbeat:${job.id}`,
 			resumeIfIdle: true,
@@ -6508,10 +6508,22 @@ export class AgentSession {
 
 	clearQueuedAgentMessages(): { steering: string[]; followUp: string[] } {
 		this._agentMessageClearEpoch++;
-		return this.clearQueuedUserMessagesMatching(isAgentSessionMessagePrompt);
+		// customType identifies agent messages; the text parser covers persisted pre-grammar prompts.
+		return this._clearQueuedTurnActionsMatching(
+			(action) =>
+				isAgentSessionMessage(primaryDeliveryRecord(action).message) ||
+				isAgentSessionMessagePrompt(action.payload.text),
+		);
 	}
 
 	clearQueuedUserMessagesMatching(predicate: (text: string) => boolean): { steering: string[]; followUp: string[] } {
+		return this._clearQueuedTurnActionsMatching((action) => predicate(action.payload.text));
+	}
+
+	private _clearQueuedTurnActionsMatching(matches: (action: QueuedSessionAction) => boolean): {
+		steering: string[];
+		followUp: string[];
+	} {
 		const ownedActions = this._actionStore.ownedActions();
 		const dispatchedTurnCount = ownedActions.filter(
 			(action) =>
@@ -6522,7 +6534,7 @@ export class AgentSession {
 			(action) =>
 				action.payload.kind === "turn" &&
 				action.agentMessageId !== undefined &&
-				predicate(action.payload.text) &&
+				matches(action) &&
 				(action.lifecycle.state === "queued" ||
 					action.lifecycle.state === "selected" ||
 					action.lifecycle.state === "preparing" ||
@@ -7501,9 +7513,9 @@ export class AgentSession {
 				? ` Variables above the per-variable snapshot limit were removed: ${pruned.join(", ")}.`
 				: "";
 		const content = [
-			"<ipython_state>",
+			"[python-state]",
+			"",
 			`Your Python kernel persisted through compaction; its remaining variables, imports, and helpers are still available.${prunedDetail}${detail}`,
-			"</ipython_state>",
 		].join("\n");
 		const message = {
 			role: "custom" as const,
@@ -7526,7 +7538,7 @@ export class AgentSession {
 	}
 
 	private _onIpythonStateRestored(result: RestoreResult): void {
-		const lines = ["<ipython_state_restored>"];
+		const lines = ["[python-state-restored]", ""];
 		if (result.restored.length > 0) {
 			lines.push(
 				`Your Python kernel state was revived from your previous session. These names are available again: ${result.restored.join(", ")}.`,
@@ -7541,7 +7553,6 @@ export class AgentSession {
 				`These could not be restored and must be recreated if needed: ${result.failed.map((f) => f.name).join(", ")}.`,
 			);
 		}
-		lines.push("</ipython_state_restored>");
 		void this.sendCustomMessage(
 			{
 				customType: IPYTHON_STATE_RESTORED_CUSTOM_TYPE,

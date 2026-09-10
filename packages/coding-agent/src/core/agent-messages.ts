@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { HostRequestHandler } from "./kernel/index.js";
 import type { CustomMessage } from "./messages.js";
-import { ASYNC_BASH_COMPLETION_CUSTOM_TYPE, HEARTBEAT_PROMPT_CUSTOM_TYPE } from "./messages.js";
+import {
+	ASYNC_BASH_COMPLETION_CUSTOM_TYPE,
+	HEARTBEAT_PROMPT_CUSTOM_TYPE,
+	sanitizeMessageHeaderValue,
+} from "./messages.js";
 import { canonicalSessionPath } from "./session-lease.js";
 
 export const AGENT_MESSAGE_CUSTOM_TYPE = "agent_message";
@@ -365,6 +369,10 @@ export function assertAgentMessageQueueCapacity(
 	}
 }
 
+/**
+ * Parses the message id out of the pre-bracket-grammar header that persisted
+ * transcripts still contain; current prompts keep the id in details only.
+ */
 export function parseAgentSessionMessagePromptId(text: string): string | undefined {
 	const lines = text.split("\n");
 	const offset = lines[0]?.startsWith("[from ") ? 1 : 0;
@@ -387,22 +395,16 @@ export function isAgentSessionMessagePrompt(text: string): boolean {
 }
 
 export function createAgentSessionMessagePrompt(payload: AgentSessionMessagePayload): string {
-	const relationshipLabel = payload.fromRelationship
-		? `[from ${payload.fromRelationship}${payload.fromRelationship === "parent" ? "" : `:${formatAgentSessionMessageMetadata(payload.from?.sessionName ?? payload.from?.sessionId ?? payload.from?.activeSessionId ?? "unknown")}`}]`
-		: undefined;
-	const lines = [
-		...(relationshipLabel ? [relationshipLabel] : []),
-		"Agent-to-agent message received.",
-		`Source: ${payload.source}`,
-	];
-	if (payload.from) {
-		lines.push(`From: ${formatAgentSessionMessageSender(payload.from)}`);
-	}
-	lines.push(`To: ${formatAgentSessionMessageEndpoint(payload.target)}`);
-	lines.push(`Message id: ${payload.id}`);
-	lines.push("");
-	lines.push(payload.message);
-	return lines.join("\n");
+	const senderName =
+		sanitizeMessageHeaderValue(
+			payload.from?.sessionName ??
+				payload.from?.sessionId ??
+				payload.from?.activeSessionId ??
+				payload.from?.clientId ??
+				"unknown",
+		) || "unknown";
+	const sender = payload.fromRelationship ? `${payload.fromRelationship}:${senderName}` : senderName;
+	return `[agent-message from ${sender}]\n\n${payload.message}`;
 }
 
 export function createAgentSessionMessage(
@@ -616,33 +618,4 @@ export function createAgentMessageHostHandlers(
 			})) as unknown as Record<string, unknown>;
 		},
 	};
-}
-
-function formatAgentSessionMessageMetadata(value: string): string {
-	return value.replace(/[\s,[\]]+/g, " ").trim();
-}
-
-function formatAgentSessionMessageSender(sender: AgentSessionMessageSender): string {
-	const parts: string[] = [];
-	if (sender.sessionName) {
-		const sessionName = formatAgentSessionMessageMetadata(sender.sessionName);
-		if (sessionName) {
-			parts.push(sessionName);
-		}
-	}
-	if (sender.activeSessionId) {
-		parts.push(`active ${formatAgentSessionMessageMetadata(sender.activeSessionId)}`);
-	}
-	if (sender.sessionId) {
-		parts.push(`session ${formatAgentSessionMessageMetadata(sender.sessionId)}`);
-	}
-	if (sender.clientId) {
-		parts.push(`client ${formatAgentSessionMessageMetadata(sender.clientId)}`);
-	}
-	return parts.length > 0 ? parts.join(", ") : "unknown sender";
-}
-
-function formatAgentSessionMessageEndpoint(endpoint: AgentSessionMessageEndpoint): string {
-	const name = endpoint.sessionName ? `${formatAgentSessionMessageMetadata(endpoint.sessionName)}, ` : "";
-	return `${name}active ${formatAgentSessionMessageMetadata(endpoint.activeSessionId)}, session ${formatAgentSessionMessageMetadata(endpoint.sessionId)}`;
 }
