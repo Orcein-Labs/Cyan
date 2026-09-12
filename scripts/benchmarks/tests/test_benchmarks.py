@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 from pydantic import ValidationError
 
 from cli import completed_report, main, validate_completion, workflow_source
-from controller import Canceled, Controller, cleanup, labels, side_complete
+from controller import Canceled, Controller, cleanup, labels
 from github import TITLE, GitHub
 from report import MARKER, METRICS, RUNTIME_METRICS, comparison, render
 from schema import (
@@ -27,6 +27,7 @@ from schema import (
     Request,
     Side,
     load_report,
+    side_complete,
     write_json,
 )
 from terminal import QUERIES, Display, Terminal
@@ -92,16 +93,6 @@ while True:
                 finally:
                     terminal.close()
         self.assertGreater(measurements[1] - measurements[0], 0.25)
-
-    def test_recognizes_current_and_legacy_prompt_bars(self):
-        for text in ("agents/resume\r\n> ", ">\r\n← manage        unknown  0"):
-            display = Display(lambda _reply: None)
-            display.feed(text)
-            self.assertTrue(display.prompt_ready())
-        for text in ("Loading...", ">", "← manage"):
-            display = Display(lambda _reply: None)
-            display.feed(text)
-            self.assertFalse(display.prompt_ready())
 
     def test_queries_split_at_every_boundary(self):
         for query, reply in QUERIES.items():

@@ -30,6 +30,7 @@ from schema import (
     Request,
     Result,
     Side,
+    trial_errors,
     write_json,
 )
 from terminal import Terminal
@@ -399,40 +400,57 @@ def measure(request: Request, side: Side, trial: int) -> None:
         raise RuntimeError("The first installation must succeed before interactive measurements")
     home = HOMES / "benchmark1"
     stop_processes("benchmark1")
-    for mode in ("cold", "warm"):
-        terminal = Terminal(
-            [
-                "/usr/sbin/runuser",
-                "-u",
-                "benchmark1",
-                "--",
-                "prime-agent",
-            ],
-            home / "workspace",
-            environment("benchmark1"),
-            RESULTS / f"{mode}-{trial}",
-        )
-        try:
-            record(side, mode, trial, terminal.ready())
-            terminal.settle(1)
+    cold_ready = False
+    try:
+        for mode in ("cold", "warm"):
+            terminal = None
+            metric: Metric = mode
+            startup_ready = False
+            settled = False
+            try:
+                terminal = Terminal(
+                    ["/usr/sbin/runuser", "-u", "benchmark1", "--", "prime-agent"],
+                    home / "workspace",
+                    environment("benchmark1"),
+                    RESULTS / f"{mode}-{trial}",
+                )
+                record(side, mode, trial, terminal.ready())
+                startup_ready = True
+                if mode == "cold":
+                    cold_ready = True
+                    metric = "rss"
+                    terminal.settle(1)
+                    settled = True
+                    processes = memory(pwd.getpwnam("benchmark1").pw_uid)
+                    if not processes:
+                        raise RuntimeError("No owned processes found for memory measurement")
+                    record(side, "rss", trial, sum(process.rss for process in processes))
+                    if all(process.pss is not None for process in processes):
+                        record(side, "pss", trial, sum(process.pss or 0 for process in processes))
+                    side.processes = processes
+                    write_json(RESULTS / f"memory-{trial}.json", Result(request=request, side=side))
+                else:
+                    terminal.settle(1)
+            except Exception as error:
+                if mode == "warm" and startup_ready:
+                    side.error = f"warm settle: {clean_error(error)}"[:500]
+                else:
+                    record(side, metric, trial, error=clean_error(error))
+                # Memory collection does not determine whether the cold daemon can be reused.
+                if mode != "cold" or not startup_ready or not settled:
+                    return
+            finally:
+                if terminal:
+                    terminal.close()
             if mode == "cold":
-                processes = memory(pwd.getpwnam("benchmark1").pw_uid)
-                if not processes:
-                    raise RuntimeError("No owned processes found for memory measurement")
-                record(side, "rss", trial, sum(process.rss for process in processes))
-                if all(process.pss is not None for process in processes):
-                    record(side, "pss", trial, sum(process.pss or 0 for process in processes))
-                side.processes = processes
-                write_json(RESULTS / f"memory-{trial}.json", Result(request=request, side=side))
-        except Exception as error:
-            record(side, mode, trial, error=clean_error(error))
-        finally:
-            terminal.close()
-        if mode == "cold":
-            stop_agents(home)
-    stop_processes("benchmark1")
-    if trial == 0 and any(sample.value is not None for sample in side.metrics.get("cold", [])):
-        record(side, "disk", 0, disk_bytes(home) - int(side.runtime["home_before_install_bytes"]))
+                stop_agents(home)
+    finally:
+        stop_processes("benchmark1")
+        if trial == 0 and cold_ready:
+            try:
+                record(side, "disk", 0, disk_bytes(home) - int(side.runtime["home_before_install_bytes"]))
+            except Exception as error:
+                record(side, "disk", 0, error=clean_error(error))
 
 
 def runtime(side: Side, trial: int) -> None:
@@ -543,6 +561,7 @@ def main() -> None:
             side=Side(sha=request.sha),
         )
     )
+    result.side.error = None
     try:
         if args.phase == "prepare":
             prepare(request, result.side)
@@ -557,6 +576,9 @@ def main() -> None:
         raise
     finally:
         write_json(path, result)
+    errors = trial_errors(result.side, args.phase, args.trial)
+    if errors:
+        raise SystemExit("; ".join(errors))
 
 
 if __name__ == "__main__":
