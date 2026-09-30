@@ -1,0 +1,78 @@
+# Cyan sub-harness contribution declaration.
+#
+# A sub-harness is NOT a mode. It contributes domain machinery and context; it
+# does not determine cognitive operating policy. The distinction is load-bearing:
+# if a sub-harness could set policy, then Game Dev would be a fourth mode, and
+# the mode layer would need a cross-product to describe combinations that
+# already compose.
+#
+# Schema rationale: modes/research-planning/mode.yaml.
+
+id: wge
+kind: subharness
+version: 1
+
+title: WGE Sub-Harness
+summary: >-
+  Extend a Cyan session with game and world-engineering domain machinery.
+
+contract:
+  file: contract.md
+
+# ---------------------------------------------------------------------------
+# Tools this sub-harness contributes.
+# ---------------------------------------------------------------------------
+# Added to whichever mode is active, then filtered by the mode's refusals. The
+# mechanism is a set difference, not a convention: a mode that dismisses
+# mutating tools loses every tool named in `mutating` below, whatever it is
+# called. That is what keeps this safe to attach to a read-only mode.
+tools:
+  offer:
+    - wge-world-ir
+    - wge-asset-machinery
+    - wge-geometry
+    - wge-solvers
+    - wge-predicates
+    - wge-validators
+    - wge-commit
+  # The subset that can change state. Declared here rather than inferred from
+  # names, so a contributed `wge-commit` is denied by a mode that dismisses
+  # `write` -- without the mode layer knowing what WGE is.
+  mutating:
+    - wge-asset-machinery
+    - wge-commit
+
+# ---------------------------------------------------------------------------
+# Authority requirements.
+# ---------------------------------------------------------------------------
+# A sub-harness cannot grant authority. It can only *require* it, meaning:
+# "these tools need these C-class effects, and if the active mode's ceiling does
+# not grant them, the call fails closed at the broker."
+#
+# This is why a sub-harness composition is safe to allow. There is no path by
+# which attaching WGE widens what a session may do on the host. It can only
+# make a session ask for something the mode already decided about.
+requires:
+  host_request:
+    - rlm.create_session
+    - rlm.list_subagents
+    - rlm.collect
+    - rlm.progress.note
+    - rlm.delete_subagent
+
+# ---------------------------------------------------------------------------
+# Context contribution.
+# ---------------------------------------------------------------------------
+# Injected into the session's context in addition to the mode's doctrine. The
+# mode still decides how to *approach* the problem; the sub-harness decides what
+# is available to approach it with.
+context:
+  file: context.md
+
+artifacts:
+  offer:
+    - world-ir
+    - generation-record
+    - evidence
+    - receipts
+    - proposal

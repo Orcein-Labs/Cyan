@@ -1,0 +1,129 @@
+# Cyan agent mode declaration.
+#
+# This file is the single source of truth for a mode. It is read by:
+#   - the TypeScript chassis, at session construction, to project the mode into
+#     a system prompt, a tool allowlist, and a capability ceiling;
+#   - the Julia side (Agents.jl), to build phase hooks and mode state.
+#
+# It is deliberately data, not code. Session construction happens before the
+# Julia kernel is up (the kernel starts lazily on first tool call), so a
+# declaration that only existed as a loaded Julia type would force a Julia cold
+# start merely to decide which tools to enable.
+#
+# YAML rather than TOML because the declaration needs comments -- the reasoning
+# is most of the value -- and `yaml` is already a dependency of this package.
+# Adding a TOML parser for a handful of files would be a dependency with one
+# consumer.
+#
+# Nothing here grants authority. `capabilities` is a ceiling fragment; the host
+# broker decides, and a child may never exceed its parent (C_child ⊆ C_caller,
+# see docs/CAPABILITY_MODEL.md).
+
+id: research-planning
+kind: mode
+version: 1
+
+title: Research & Planning
+summary: >-
+  Explore, develop, compare, pressure-test, and refine ideas before committing
+  to implementation.
+
+doctrine:
+  file: doctrine.md
+
+# ---------------------------------------------------------------------------
+# Authority: a fragment of the session capability ceiling.
+# ---------------------------------------------------------------------------
+# Only broker-mediated (C-class) effects appear here. Class A (pure compute)
+# and class B (sandbox-local) need no entry: they are already bounded by the
+# OS sandbox, and routing them through authorization would be friction without
+# a boundary. Unrecognized categories fail closed in the broker.
+capabilities:
+  host_request:
+    allowed_types:
+      - rlm.create_session
+      - rlm.find_models
+      - rlm.list_subagents
+      - rlm.collect
+      - rlm.progress.note
+      - rlm.delete_subagent
+  network_access:
+    allowed: false
+    allowed_hosts: []
+  external_fs_write:
+    allowed_dirs: []
+  package_management:
+    allowed_packages: []
+
+# ---------------------------------------------------------------------------
+# Tool surface.
+# ---------------------------------------------------------------------------
+# `promote` is an allowlist, not a hint. A tool absent from this list is not
+# available to the session. `dismiss` exists to make denials explicit and
+# legible rather than implicit-by-absence.
+tools:
+  promote:
+    - palette
+    - web-search
+    - web-fetch
+    - read
+    - grep
+    - glob
+    - list
+  dismiss:
+    - write
+    - edit
+    - apply-patch
+
+# ---------------------------------------------------------------------------
+# Phase policy.
+# ---------------------------------------------------------------------------
+# A cognitive control policy, not a wizard. The session may move forward,
+# back, or laterally between phases; the mode records where it is so that
+# phase-dependent precision and capability preference can be applied without
+# imposing a rigid visible sequence on the conversation.
+phases:
+  order:
+    - whiteboard
+    - steelman
+    - expand
+    - pressure-test
+    - experiment-design
+    - converge
+  default: whiteboard
+  # Phases in which write-capable tools are re-enabled. Research that produces
+  # a code artifact (a benchmark, a notebook, a proof script) needs them; pure
+  # analysis does not. This is the interaction doctrine's "low cognitive
+  # friction" preference expressed mechanically rather than as prose.
+  reentry_tools:
+    experiment-design: [write]
+    converge: [write]
+
+# ---------------------------------------------------------------------------
+# Mode state.
+# ---------------------------------------------------------------------------
+# `kind` selects a state implementation. "research" is defined by this mode and
+# is the only state kind that exists; it is deliberately the sole client of
+# that implementation rather than a speculative general store.
+state:
+  kind: research
+  serializable: true
+
+# ---------------------------------------------------------------------------
+# Artifact expectations. Not enforcement: this is what a converged session is
+# expected to have produced, used for handoff to Engineer mode.
+# ---------------------------------------------------------------------------
+artifacts:
+  expect:
+    - master-spec
+    - research-dossier
+    - open-question-register
+  optional:
+    - decision-record
+    - experiment-proposal
+
+handoff:
+  # Engineer is the default downstream mode. The research state carries the
+  # hypotheses, evidence, and rejected branches that Engineer should not have
+  # to rediscover.
+  downstream: engineer

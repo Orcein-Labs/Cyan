@@ -1,0 +1,1 @@
+- Added the agent mode layer: `modes/research-planning`, `modes/engineer`, and `modes/red-team` as declarative YAML, plus a `subharness/wge` contribution seam, composed into a `SessionPlan` that projects one declaration into a system prompt, a tool allowlist, and a capability ceiling.

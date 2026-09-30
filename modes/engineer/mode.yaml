@@ -1,0 +1,81 @@
+# Cyan agent mode declaration. Schema rationale: modes/research-planning/mode.yaml.
+#
+# Engineer is the first proof that the mode abstraction is not secretly
+# research-planning with a different name. It differs in the two ways that
+# matter mechanically: write tools are promoted rather than dismissed, and its
+# capabilities include the C-class effects that shipping a change requires.
+
+id: engineer
+kind: mode
+version: 1
+
+title: Engineer
+summary: >-
+  Convert an accepted goal, plan, experiment, or specification into a working
+  and verified artifact.
+
+doctrine:
+  file: doctrine.md
+
+capabilities:
+  host_request:
+    allowed_types:
+      - rlm.create_session
+      - rlm.find_models
+      - rlm.list_subagents
+      - rlm.collect
+      - rlm.progress.note
+      - rlm.delete_subagent
+  network_access:
+    allowed: true
+    allowed_hosts: []
+  external_fs_write:
+    allowed_dirs: []
+  package_management:
+    allowed_packages: []
+
+tools:
+  promote:
+    - palette
+    - read
+    - grep
+    - glob
+    - list
+    - write
+    - edit
+    - apply-patch
+    - shell
+  dismiss: []
+
+phases:
+  order:
+    - understand
+    - inspect
+    - plan
+    - implement
+    - test
+    - diagnose
+    - repair
+    - verify
+    - deliver
+  default: understand
+
+# No `state` section, deliberately.
+#
+# This is the honest state of the abstraction: research state has exactly one
+# client. When a second mode needs mode state, that is when the interface gets
+# extracted -- not before. A "general mode state" with one user would be a
+# speculative abstraction with a single hypothetical client, which the design
+# explicitly rules out.
+
+artifacts:
+  expect:
+    - working-implementation
+    - tests
+    - verification-receipts
+  optional:
+    - decision-record
+    - changelog-fragment
+
+handoff:
+  downstream: red-team

@@ -1,0 +1,77 @@
+# --- Node / TypeScript chassis ---
+node_modules/
+dist/
+*.log
+# CyanTunnel operator logs are the EVIDENCE TIER (session transcripts,
+# harness kill-ladder logs, kernel stderr) cited by docs/research —
+# re-included despite the global *.log rule above
+!CyanTunnel/logs/*.log
+.DS_Store
+*.tsbuildinfo
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+*.cpuprofile
+
+# --- Julia (Palette operator surface) ---
+.julia/
+*.ji
+*.jl.cov
+*.jl.mem
+docs/build/
+
+# Ephemeral-tool cold provenance (mechanical, per-workspace runtime output,
+# not source -- see Neura.jl's record_tool_capsule)
+.palette/
+deps/
+
+# --- Rust (Palette host) ---
+target/
+**/*.rs.bk
+
+# --- Environment ---
+.env
+.env.local
+*.env.*
+.prime/
+
+# --- Editors ---
+.vscode/
+.zed/
+.idea/
+.claude/
+.cursor/
+*.swp
+*.swo
+*~
+
+# --- Package specific ---
+packages/coding-agent/catalog/*.bundled.json
+prime-agent-catalog/
+.npm/
+coverage/
+.nyc_output/
+.pi_config/
+tui-debug.log
+compaction-results/
+.opencode/
+syntax.jsonl
+out.jsonl
+pi-*.html
+out.html
+packages/coding-agent/binaries/
+packages/coding-agent/release/
+todo.md
+plans/
+.prime/agent/
+collect.sh
+.kernel-venv/
+.worktrees/
+
+# --- System ---
+Thumbs.db
+*.tmp
+
+# --- Python ---
+__pycache__/
+*.pyc

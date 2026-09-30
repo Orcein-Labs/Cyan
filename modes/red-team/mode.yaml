@@ -1,0 +1,80 @@
+# Cyan agent mode declaration. Schema rationale: modes/research-planning/mode.yaml.
+#
+# Red-Team's tool set is the load-bearing part of this file. The mode's own
+# doctrine is "produce evidence and failures before it becomes a repair agent,"
+# and that rule is only durable if it is enforced: a Red-Team session that can
+# write is a Red-Team session that will eventually repair instead of reporting.
+# Remediation is a deliberate promotion, recorded as such, not a side effect of
+# having a patch tool on hand.
+
+id: red-team
+kind: mode
+version: 1
+
+title: Red-Team
+summary: >-
+  Adversarially investigate an existing design, implementation, experiment, or
+  claim and determine where its assumptions or guarantees fail.
+
+doctrine:
+  file: doctrine.md
+
+capabilities:
+  host_request:
+    allowed_types:
+      - rlm.create_session
+      - rlm.find_models
+      - rlm.list_subagents
+      - rlm.collect
+      - rlm.progress.note
+      - rlm.delete_subagent
+  network_access:
+    allowed: true
+    allowed_hosts: []
+  external_fs_write:
+    allowed_dirs: []
+  # Deliberately empty, and different in kind from red-team's missing write
+  # tools: installing a package can change the artifact under attack, which
+  # invalidates the findings this mode exists to produce. The repo's own audit
+  # found this class of leak before the category existed.
+  package_management:
+    allowed_packages: []
+
+tools:
+  promote:
+    - palette
+    - read
+    - grep
+    - glob
+    - list
+    - shell
+  dismiss:
+    - write
+    - edit
+    - apply-patch
+
+phases:
+  order:
+    - establish-claims
+    - extract-assumptions
+    - map-attack-surface
+    - generate-failure-hypotheses
+    - probe
+    - reproduce
+    - classify
+    - report
+    - harden
+  default: establish-claims
+
+# No `state` section. See modes/engineer/mode.yaml for why.
+
+artifacts:
+  expect:
+    - failure-report
+    - reproductions
+    - hardening-tickets
+  optional:
+    - decision-record
+
+handoff:
+  downstream: engineer
