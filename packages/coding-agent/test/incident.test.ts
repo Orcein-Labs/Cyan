@@ -79,16 +79,16 @@ function providerFailureLine(ts: string, pid: number): string {
 // ---------------------------------------------------------------------------
 
 describe("incident timeline for a clean run", () => {
-	it("shows supervisor and worker events with no anomaly entries", () => {
+	it.each(["Cyan", "Prime Agent"])("classifies %s supervisor and worker startup with no anomaly entries", (brand) => {
 		const text = reportFor(
 			[
 				[
 					"2026-09-10T20:00:05.000Z",
-					"Prime Agent daemon supervisor e14de15c listening on /tmp/prime-agent-501/daemon.sock",
+					`${brand} daemon supervisor e14de15c listening on /tmp/prime-agent-501/daemon.sock`,
 				],
 				[
 					"2026-09-10T20:01:00.000Z",
-					"Session worker 477fef4e85a8 stderr: Prime Agent daemon listening on /tmp/prime-agent-501/worker-a-477fef4e85a8.sock",
+					`Session worker 477fef4e85a8 stderr: ${brand} daemon listening on /tmp/prime-agent-501/worker-a-477fef4e85a8.sock`,
 				],
 				["2026-09-10T20:02:00.000Z", "Migrated 2 scheduled jobs into session artifacts"],
 				[
@@ -105,6 +105,8 @@ describe("incident timeline for a clean run", () => {
 				],
 			].map(([ts, msg]) => supervisorLine(ts, msg, { pid: 15026 })),
 		);
+		expect(text).toContain("Cyan incident timeline");
+		expect(text).toContain("daemon supervisor listening");
 		expect(text).toContain("Supervisor events");
 		expect(text).toContain("worker 477fef4e85a8 started");
 		expect(text).toContain("worker 477fef4e85a8 stop requested (1 active session(s))");

@@ -1,7 +1,7 @@
 /**
- * NIRA-Prime Palette operator surface: does the chassis actually build a
+ * Cyan Palette operator surface: does the chassis actually build a
  * session around it, and does the real integration (not a stub) prove the
- * one thing NeuraBash's own first-pass adapter explicitly does not yet --
+ * one thing PaletteBash's own first-pass adapter explicitly does not yet --
  * session persistence surviving across separate tool calls?
  *
  * Structured the same way as neurabash-substrate-modes.test.ts: constructed
@@ -11,7 +11,7 @@
  * The `baseToolsFactory` tests below use a REAL createPaletteBaseToolsFactory
  * pointed at the actual palette-operator-lab checkout and a real Julia dev
  * project (skipped cleanly if either isn't configured/available -- see
- * `skipIfPaletteUnavailable`). This is deliberate: NeuraBash's own
+ * `skipIfPaletteUnavailable`). This is deliberate: PaletteBash's own
  * substrate-mode tests use stubs because real persistence wasn't the point
  * being proven there. Here it is the point.
  */
@@ -20,7 +20,7 @@ import { existsSync, mkdtempSync, readFileSync, readlinkSync, rmSync, watch, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentSession, createPaletteBaseToolsFactory } from "../../src/core/sdk.js";
@@ -58,10 +58,12 @@ function stubTool(name: string): AgentTool {
 	};
 }
 
-describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
+describe("Cyan: Palette substrate modes (via createAgentSession)", () => {
 	let harness: Harness | undefined;
+	const sessions: Awaited<ReturnType<typeof createAgentSession>>["session"][] = [];
 
 	afterEach(() => {
+		for (const session of sessions.splice(0)) session.dispose();
 		harness?.cleanup();
 		harness = undefined;
 	});
@@ -81,10 +83,11 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 			settingsManager: harness.settingsManager,
 			...overrides,
 		});
+		sessions.push(result.session);
 		return result.session;
 	}
 
-	it("NEURA mode (stub): baseToolsOverride still reaches AgentSession with a palette-named tool", async () => {
+	it("Palette mode (stub): baseToolsOverride still reaches AgentSession with a palette-named tool", async () => {
 		const session = await buildSession({
 			baseToolsOverride: { palette: stubTool("palette") },
 			initialActiveToolNames: ["palette"],
@@ -96,13 +99,15 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		expect(activeNames).not.toContain("ipython");
 		expect(session.getToolDefinition("ipython")).toBeUndefined();
 		expect(session.systemPrompt).not.toContain(REPL_DOCTRINE_MARKER);
+		expect(session.systemPrompt).toContain("persistent Palette workspace");
+		expect(session.systemPrompt).toContain("Palette.rlm.spawn");
 	});
 
 	function textOf(result: { content: unknown[] }): string {
 		return (result.content[0] as { text: string }).text;
 	}
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: state persists across calls, in the task workspace, with printed output returned",
 		async () => {
@@ -146,7 +151,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: a timed-out wait keeps the kernel; compute that never yields stops it and the next call says so",
 		async () => {
@@ -179,7 +184,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: a kernel that never yields is replaced by one that revives the last completed call's state",
 		async () => {
@@ -214,7 +219,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: the workspace map opens the first result and the first after a compaction",
 		async () => {
@@ -248,7 +253,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: an idle kernel is stopped and revived on the next call; a long call is never stopped",
 		async () => {
@@ -296,7 +301,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: an abort mid-call stops the kernel and says so; one before the call does not",
 		async () => {
@@ -342,7 +347,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: elided output names the call whose full output the kernel kept",
 		async () => {
@@ -359,12 +364,14 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 					await tool.execute("t1", { code: 'for i in 1:500; println("line ", i); end' }, undefined, undefined),
 				);
 				expect(long).toMatch(
-					/characters elided; Neura\.output\(1\) returns everything this call printed, and ans its value/,
+					/characters elided; Palette\.output\(1\) returns everything this call printed, and ans its value/,
 				);
 				expect(long).not.toContain("line 250\n");
 				const back = await tool.execute(
 					"t2",
-					{ code: 'o = Neura.output(1); (length(split(o, "\\n"; keepempty=false)), occursin("line 250\\n", o))' },
+					{
+						code: 'o = Palette.output(1); (length(split(o, "\\n"; keepempty=false)), occursin("line 250\\n", o))',
+					},
 					undefined,
 					undefined,
 				);
@@ -378,7 +385,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: after compaction the model is told what the live kernel holds",
 		async () => {
@@ -403,7 +410,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 		300_000,
 	);
 
-	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+	// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 	it.skipIf(skipIfPaletteUnavailable())(
 		"REAL integration: dispose terminates the kernel and later calls fail",
 		async () => {
@@ -449,17 +456,20 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 			return { session, tool, call, harness };
 		}
 
-		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 		it.skipIf(skipIfPaletteUnavailable())(
 			"spawns and collects in one call and across calls, reports a failing child, and keeps the parent's ceiling",
 			async () => {
 				const { session, tool, call, harness: h } = await rlmSession(rlmCeiling);
-				expect(tool.description).toContain("Neura.rlm.spawn");
-				h.setResponses([fauxAssistantMessage("forty-two")]);
+				expect(tool.description).toContain("Palette.rlm.spawn");
+				h.setResponses([
+					fauxAssistantMessage([fauxToolCall("palette", { code: "child_value = 42" })], { stopReason: "toolUse" }),
+					fauxAssistantMessage("forty-two"),
+				]);
 				const one = textOf(
 					await call(
-						'h = Neura.rlm.spawn("what is 40 + 2?"; name = "adder"); ' +
-							"r = only(Neura.rlm.collect(h; timeout_ms = 40_000)); (r.status, r.settled, r.answer_preview)",
+						'h = Palette.rlm.spawn("what is 40 + 2?"; name = "adder"); ' +
+							"r = only(Palette.rlm.collect(h; timeout_ms = 40_000)); (r.status, r.settled, r.answer_preview)",
 					),
 				);
 				expect(one).toContain('("done", true, "forty-two")');
@@ -469,14 +479,19 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 				const child = session.getRlmChildSession(rows[0]!.rlm_child_id)!;
 				expect(child.getActiveToolNames()).toEqual(["palette"]);
 				expect(child.getToolDefinition("palette")!.description).toBe(tool.description);
+				expect(textOf(await call("@isdefined(child_value)"))).toBe("false");
+				const childResult = await child
+					.getToolDefinition("palette")!
+					.execute("child-proof", { code: "child_value + 1" }, undefined, undefined, undefined as never);
+				expect(textOf(childResult)).toBe("43");
 
 				// Spawned in one call, collected in a later one.
 				h.setResponses([fauxAssistantMessage("second answer")]);
-				await call('h2 = Neura.rlm.spawn("another"; name = "second"); h2.name');
-				const later = textOf(await call("only(Neura.rlm.collect(h2; timeout_ms = 40_000)).answer_preview"));
+				await call('h2 = Palette.rlm.spawn("another"; name = "second"); h2.name');
+				const later = textOf(await call("only(Palette.rlm.collect(h2; timeout_ms = 40_000)).answer_preview"));
 				expect(later).toContain('"second answer"');
 				expect(
-					textOf(await call('join(sort([s.session_name for s in Neura.rlm.list_subagents()]), ",")')),
+					textOf(await call('join(sort([s.session_name for s in Palette.rlm.list_subagents()]), ",")')),
 				).toContain('"adder,second"');
 
 				// A child whose model fails: Julia reports exactly what the chassis reports.
@@ -487,7 +502,7 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 				);
 				const failed = textOf(
 					await call(
-						'f = Neura.rlm.spawn("fail"; name = "failing"); r = only(Neura.rlm.collect(f; timeout_ms = 40_000)); ' +
+						'f = Palette.rlm.spawn("fail"; name = "failing"); r = only(Palette.rlm.collect(f; timeout_ms = 40_000)); ' +
 							'string(r.rlm_child_id, "|", r.status, "|", r.error)',
 					),
 				);
@@ -497,21 +512,21 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 				h.setResponses([]);
 
 				// The host's own errors reach Julia as errors.
-				await expect(call('Neura.rlm.spawn("dup"; name = "adder")')).rejects.toThrow(/adder/);
-				await expect(call('Neura.rlm.delete_subagent("nobody")')).rejects.toThrow(/nobody/);
-				expect(textOf(await call('Neura.rlm.delete_subagent("second").session_name'))).toContain('"second"');
+				await expect(call('Palette.rlm.spawn("dup"; name = "adder")')).rejects.toThrow(/adder/);
+				await expect(call('Palette.rlm.delete_subagent("nobody")')).rejects.toThrow(/nobody/);
+				expect(textOf(await call('Palette.rlm.delete_subagent("second").session_name'))).toContain('"second"');
 			},
 			// test-policy: allow explicit-test-timeout -- starts real sandboxed Julia kernels for the parent and each child
 			600_000,
 		);
 
-		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 		it.skipIf(skipIfPaletteUnavailable())(
 			"without the permission nothing is spawned, and the description does not offer it",
 			async () => {
 				const { session, tool, call } = await rlmSession({});
-				expect(tool.description).not.toContain("Neura.rlm");
-				await expect(call('Neura.rlm.spawn("x"; name = "w")')).rejects.toThrow(
+				expect(tool.description).not.toContain("Palette.rlm");
+				await expect(call('Palette.rlm.spawn("x"; name = "w")')).rejects.toThrow(
 					/host_request not in this session's ceiling/,
 				);
 				expect((await session.listRlmSubagents()).subagents).toEqual([]);
@@ -520,17 +535,17 @@ describe("NIRA-Prime: Palette substrate modes (via createAgentSession)", () => {
 			300_000,
 		);
 
-		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Neura installed
+		// test-policy: allow conditional-or-disabled-test -- needs bwrap and a host Julia project with Palette installed
 		it.skipIf(skipIfPaletteUnavailable())(
 			"a child outlives the kernel that spawned it, and the revived kernel finds it",
 			async () => {
 				const { call, harness: h } = await rlmSession(rlmCeiling, 8);
 				h.setResponses([fauxAssistantMessage("survived")]);
-				await call('h = Neura.rlm.spawn("outlive me"; name = "survivor"); h.name');
+				await call('h = Palette.rlm.spawn("outlive me"; name = "survivor"); h.name');
 				await expect(call("s = 0; while true; s += 1; end")).rejects.toThrow(/the kernel stopped/);
 				const after = textOf(
 					await call(
-						'r = only(Neura.rlm.collect("survivor"; timeout_ms = 5_000)); (r.session_name, r.answer_preview)',
+						'r = only(Palette.rlm.collect("survivor"; timeout_ms = 5_000)); (r.session_name, r.answer_preview)',
 					),
 				);
 				expect(after).toMatch(/NEW kernel/);

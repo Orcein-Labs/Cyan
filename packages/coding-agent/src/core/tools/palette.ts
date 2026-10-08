@@ -12,7 +12,7 @@ import { PALETTE_STATE_CUSTOM_TYPE } from "../messages.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 /**
- * NIRA-Prime integration point: exposes Palette (palette-operator-lab) as this
+ * Cyan integration point: exposes Palette as this
  * fork's operator surface.
  *
  * It uses `baseToolsFactory`, not `baseToolsOverride`: the factory builds tools
@@ -21,7 +21,7 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
  * every session and RLM child mutate one kernel's bindings, the same failure
  * Palette's C_child ⊆ C_caller model prevents one level down.
  *
- * Each session drives one `security/session_cli.py` process over
+ * Each session drives one `runtime/security/session_cli.py` process over
  * newline-delimited JSON. That process owns a bubblewrap-contained Julia
  * worker whose working directory is the agent's own `cwd`, bound writable.
  *
@@ -73,28 +73,32 @@ export interface PaletteToolDetails {
 
 export interface PaletteToolOptions {
 	/**
-	 * The Rust host (`palette-host`, built from the lab's host/ crate). When set (or PALETTE_HOST_BIN is), it runs
+	 * The Rust host (`palette-host`, built from the SDK's runtime/host crate). When set (or PALETTE_HOST_BIN is), it runs
 	 * the session -- sandbox, broker and bridge -- and no Python is involved.
 	 */
 	hostBin?: string;
-	/** Absolute path to security/session_cli.py, the Python host, used when no Rust host is configured. */
+	/** Absolute path to runtime/security/session_cli.py, the Python host, used when no Rust host is configured. */
 	sessionCliPath?: string;
 	/** The palette-operator-lab checkout (session_cli.py's --repo-dir). Defaults to session_cli.py's grandparent. */
 	repoDir?: string;
-	/** A Julia project with Neura dev-installed. Unset fails closed at first use. */
+	/** A Julia project with Palette dev-installed. Unset fails closed at first use. */
 	projectDir?: string;
 	/** Python interpreter for session_cli.py. Default: "python3". */
 	pythonBin?: string;
+	/** Prepared Julia depot used by this kernel only. */
+	depotPath?: string;
+	/** Optional pinned Julia executable for this kernel only. */
+	juliaBin?: string;
 	/** This session's capability ceiling (see CAPABILITY_MODEL.md). Default `{}`: no broker-mediated authority. */
 	ceiling?: Record<string, unknown>;
 	/** Give the worker raw network access. Default: false. */
 	network?: boolean;
 	/**
 	 * Per-turn limit in seconds. The worker interrupts a call still waiting at the limit and keeps the kernel;
-	 * NeuraSession kills a worker that has not answered 12s later (compute that never yields). Default: 60.
+	 * PaletteSession kills a worker that has not answered 12s later (compute that never yields). Default: 60.
 	 */
 	turnTimeout?: number;
-	/** How long to wait for the kernel's HELLO. Default: 180s, since a cold `using Neura` precompile takes ~40s. */
+	/** How long to wait for the kernel's HELLO. Default: 180s, since a cold `using Palette` precompile takes ~40s. */
 	startupTimeoutMs?: number;
 	/** Model-visible characters per result; the middle of longer output is elided. Default: unlimited. */
 	maxOutputChars?: number;
@@ -208,7 +212,10 @@ async function startKernel(
 	if (options?.turnTimeout) args.push("--turn-timeout", String(options.turnTimeout));
 	if (stateDir) args.push("--state-dir", stateDir);
 
-	const child = spawn(hostBin ?? pythonBin, args, { cwd, env: getShellEnv(), stdio: ["pipe", "pipe", "pipe"] });
+	const env = { ...getShellEnv() };
+	if (options?.depotPath) env.JULIA_DEPOT_PATH = options.depotPath;
+	if (options?.juliaBin) env.PALETTE_JULIA_BIN = options.juliaBin;
+	const child = spawn(hostBin ?? pythonBin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
 	if (child.pid) trackDetachedChildPid(child.pid);
 
 	const pending = new Map<string, PendingTurn>();
@@ -267,11 +274,13 @@ async function startKernel(
 	};
 	const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
-	child.stderr?.on("data", (chunk: Buffer) => {
-		stderrTail = (stderrTail + chunk.toString("utf8")).slice(-4000);
+	child.stderr?.setEncoding("utf8");
+	child.stdout?.setEncoding("utf8");
+	child.stderr?.on("data", (chunk: string) => {
+		stderrTail = (stderrTail + chunk).slice(-4000);
 	});
-	child.stdout?.on("data", (chunk: Buffer) => {
-		stdoutBuffer += chunk.toString("utf8");
+	child.stdout?.on("data", (chunk: string) => {
+		stdoutBuffer += chunk;
 		let newlineIndex = stdoutBuffer.indexOf("\n");
 		while (newlineIndex !== -1) {
 			const line = stdoutBuffer.slice(0, newlineIndex);
@@ -318,17 +327,6 @@ async function startKernel(
 	});
 	child.on("error", (err) => markDead(`palette: kernel process failed to start: ${err.message}`));
 
-	const startupTimer = setTimeout(() => {
-		markDead(`palette: kernel did not start within ${startupTimeoutMs}ms. stderr: ${stderrTail}`);
-		child.kill("SIGTERM");
-	}, startupTimeoutMs + 5000);
-	let hello: Record<string, unknown>;
-	try {
-		hello = await helloPromise;
-	} finally {
-		clearTimeout(startupTimer);
-	}
-
 	// session_cli.py tears down its sandbox and depot clone on stdin EOF or
 	// SIGTERM. SIGKILL is the last resort because it skips that cleanup.
 	const stop = async () => {
@@ -340,6 +338,20 @@ async function startKernel(
 		const terminated = await Promise.race([exited.then(() => true), sleep(20_000).then(() => false)]);
 		if (!terminated && child.pid) killProcessTree(child.pid);
 	};
+
+	const startupTimer = setTimeout(() => {
+		markDead(`palette: kernel did not start within ${startupTimeoutMs}ms. stderr: ${stderrTail}`);
+		child.kill("SIGTERM");
+	}, startupTimeoutMs + 5000);
+	let hello: Record<string, unknown>;
+	try {
+		hello = await helloPromise;
+	} catch (error) {
+		await stop();
+		throw error;
+	} finally {
+		clearTimeout(startupTimer);
+	}
 
 	return {
 		epoch: String(hello.epoch),
@@ -411,7 +423,7 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 }
 
-// Names under [deps] in the session project's Project.toml. Neura is the
+// Names under [deps] in the session project's Project.toml. Palette is the
 // kernel itself, not something a turn loads.
 function projectPackages(projectDir: string | undefined): string[] {
 	if (!projectDir) return [];
@@ -422,11 +434,13 @@ function projectPackages(projectDir: string | undefined): string[] {
 		return [];
 	}
 	const deps = /^\[deps\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
-	return [...deps.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1]).filter((name) => name !== "Neura");
+	return [...deps.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)]
+		.map((m) => m[1])
+		.filter((name) => name !== "Palette");
 }
 
 /**
- * The host request types behind Neura.rlm. A session gets them only when its
+ * The host request types behind Palette.rlm. A session gets them only when its
  * ceiling names them: `ceiling: { host_request: { allowed_types: PALETTE_RLM_REQUEST_TYPES } }`.
  */
 export const PALETTE_RLM_REQUEST_TYPES = [
@@ -441,7 +455,10 @@ export const PALETTE_RLM_REQUEST_TYPES = [
 
 function allowsRlm(options: PaletteToolOptions | undefined): boolean {
 	const cap = options?.ceiling?.host_request as { allowed_types?: unknown } | undefined;
-	return Array.isArray(cap?.allowed_types) && cap.allowed_types.includes("rlm.run");
+	const allowed = cap?.allowed_types;
+	return (
+		Array.isArray(allowed) && ["rlm.run", "rlm.collect", "rlm.list_subagents"].every((type) => allowed.includes(type))
+	);
 }
 
 function paletteDescription(options: PaletteToolOptions | undefined): string {
@@ -458,7 +475,7 @@ function paletteDescription(options: PaletteToolOptions | undefined): string {
 		`Each call may run for ${timeout}s. Waiting work (sleep, run, reading a process or file) is then interrupted and the kernel keeps every binding; compute that never yields cannot be interrupted, so the kernel stops and the next call starts a fresh one and says so. Start longer work (a build, a test suite) in the background, job = @async sh"cargo build 2>&1", and collect it in a later call with fetch(job); a background failure is reported at the next call.`,
 		...(allowsRlm(options)
 			? [
-					'Sub-agents from code: h = Neura.rlm.spawn("task"; name = "worker") starts one and returns at once; Neura.rlm.collect(h; timeout_ms = 30_000) returns its result when it settles (timeout_ms = 0 gives a snapshot). Spawn several in a loop and collect them together; a child that outlasts a call is collected in a later call. Neura.rlm.list_subagents() lists them.',
+					'Sub-agents from code: h = Palette.rlm.spawn("task"; name = "worker") starts one and returns at once; Palette.rlm.collect(h; timeout_ms = 30_000) returns its result when it settles (timeout_ms = 0 gives a snapshot). Spawn several in a loop and collect them together; a child that outlasts a call is collected in a later call. Palette.rlm.list_subagents() lists them.',
 				]
 			: []),
 		`Loadable packages: ${loadable}.${options?.network ? "" : " There is no network access, so Pkg.add cannot install more."} kernelinfo() describes the kernel; varinfo() lists your bindings.`,
@@ -510,7 +527,7 @@ export function createPaletteBaseToolsFactory(cwd: string, options?: PaletteTool
 		async function liveKernel(): Promise<{ kernel: PaletteKernel; restartedFrom?: string }> {
 			if (disposed) throw new Error("palette: session disposed");
 			if (kernelPromise) {
-				const current = await kernelPromise.catch(() => undefined);
+				const current = await kernelPromise;
 				if (current && !current.isDead()) return { kernel: current };
 				if (current) await current.dispose();
 			}
@@ -521,9 +538,7 @@ export function createPaletteBaseToolsFactory(cwd: string, options?: PaletteTool
 			return { kernel, restartedFrom };
 		}
 
-		// Started lazily, the first call waited for the whole startup (~3s).
-		// A start that fails here is retried by that first call, which then
-		// reports the failure.
+		// Startup overlaps the first model request; its failure is surfaced by the tool.
 		liveKernel().then(armIdleStop, () => undefined);
 
 		const definition: ToolDefinition<typeof paletteSchema, PaletteToolDetails> = {
@@ -572,7 +587,7 @@ export function createPaletteBaseToolsFactory(cwd: string, options?: PaletteTool
 					// read back in pieces instead of recomputed.
 					const fullText =
 						typeof response.call === "number"
-							? `Neura.output(${response.call}) returns everything this call printed${response.success === true ? ", and ans its value" : ""}`
+							? `Palette.output(${response.call}) returns everything this call printed${response.success === true ? ", and ans its value" : ""}`
 							: undefined;
 					const { text, truncated } = truncateMiddle(
 						formatPaletteResponse(response),

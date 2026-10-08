@@ -5,7 +5,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { PRIME_COMPACT_BUTTERFLY_LOGO } from "../../../themes/prime-logo.js";
+import { CYAN_LOGO } from "../../../themes/cyan-logo.js";
 import { getResolvedThemeColors, type ThemeColor, theme } from "../theme/theme.js";
 import { isOnboardingExitKey } from "./onboarding-exit.js";
 import { onboardingHighlightBackground } from "./onboarding-highlight.js";
@@ -21,19 +21,19 @@ interface PrimeOnboardingSplashOptions {
 	immediate?: boolean;
 }
 
-const LOGO_LINES = PRIME_COMPACT_BUTTERFLY_LOGO.split("\n");
+const LOGO_LINES = CYAN_LOGO.split("\n");
 const LOGO_WIDTH = LOGO_LINES.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
 const ANIMATION_INTERVAL_MS = 120;
 /** Matches BrandSplashHeader so the mark keeps its place when the block unmounts. */
 const PADDING_X = 1;
 /** The mark sits a little further right than the text column. */
 const LOGO_INDENT = 5;
-const LOGIN_ACTION_LABEL = "Log in with Prime Intellect";
+const LOGIN_ACTION_LABEL = "Configure models";
 const MARKER_WIDTH = 2;
 /** What the agent is, wrapped under the welcome line. */
 const DESCRIPTION_PARAGRAPHS = [
 	"A self-improving RLM harness with persistent context, recursive subagents, and direct swarm communication.",
-	"It learns from its history by refining its own memories, skills, prompts, and subagent specifications.",
+	"Connect a supported provider or configure a local endpoint in ~/.cyan/agent/models.json. Forked from Prime Agent.",
 ];
 const DESCRIPTION_WIDTH = 56;
 const MIN_HIGHLIGHT_WIDTH = 30;
@@ -122,7 +122,7 @@ export class PrimeOnboardingSplashComponent implements Component {
 		if (kb.matches(keyData, "tui.select.confirm")) {
 			this.onSelect();
 		}
-		// Cancel is deliberately unbound: signing in is the only way forward, and
+		// Cancel is deliberately unbound: configuration starts here, and
 		// the gaps between steps must not drop the user into an unconfigured chat.
 	}
 
@@ -207,14 +207,10 @@ export class PrimeOnboardingSplashComponent implements Component {
 	}
 
 	private renderBrandLine(): string {
-		return (
-			theme.fg("text", "Welcome to ") +
-			theme.bold(theme.fg("text", "PRIME")) +
-			theme.italic(theme.fg("text", " Agent"))
-		);
+		return theme.fg("text", "Welcome to ") + theme.bold(theme.fg("text", "Cyan"));
 	}
 
-	/** Signing in is the only way forward, so the block offers a single action. */
+	/** Model configuration starts here, so the block offers a single action. */
 	private renderActions(width: number, layout: { contentLeft: number; contentWidth: number }): string[] {
 		const highlightWidth = layout.contentWidth;
 		const content = truncateToWidth(`> ${LOGIN_ACTION_LABEL}`, highlightWidth, "");
@@ -232,6 +228,9 @@ export class PrimeOnboardingSplashComponent implements Component {
 		const quietZone: QuietZone = { left: markLeft, right: markLeft + LOGO_WIDTH - 1, top: 0, bottom: rows - 1 };
 		this.drawField(canvas, fieldWidth, rows, quietZone);
 		LOGO_LINES.forEach((line, y) => {
+			for (let x = 0; x < LOGO_WIDTH; x++) {
+				this.put(canvas, markLeft + x, y, " ", "text", 8, fieldWidth);
+			}
 			[...line].forEach((char, x) => {
 				if (char !== " ") {
 					this.put(canvas, markLeft + x, y, char, "text", 8, fieldWidth);

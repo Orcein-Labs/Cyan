@@ -1,0 +1,4 @@
+- Added a Cyan source launcher and prepared Palette runtime selection with durable per-session state.
+- Updated the Palette adapter to use current Julia names and isolated runtime environment settings.
+- Replaced Prime-only onboarding with provider/model configuration and a Cyan terminal wordmark; retained upstream attribution and optional providers.
+- Isolated Cyan daemon shutdown and configuration paths, disabled upstream self-updates, and made usage analytics opt-in.

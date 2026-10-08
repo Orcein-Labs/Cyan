@@ -9,6 +9,7 @@ import {
 	captureAgentCommandUsed,
 	getOrCreateTelemetryInstallationId,
 	installAgentTelemetry,
+	isTelemetryEnabled,
 	TelemetryClient,
 	type TelemetryEvent,
 	type TelemetryEventName,
@@ -96,6 +97,22 @@ afterEach(() => {
 });
 
 describe("telemetry identity and transport", () => {
+	it("Cyan onboarding regression requires explicit upstream analytics consent", async () => {
+		vi.stubEnv("CYAN_TELEMETRY", "");
+		vi.stubEnv("PRIME_AGENT_TELEMETRY", "");
+		vi.stubEnv("PI_OFFLINE", "0");
+		vi.stubEnv("DO_NOT_TRACK", "0");
+		const settingsManager = SettingsManager.inMemory();
+		const sink = new FakeTelemetrySink();
+		await captureAgentCommandUsed({ agentDir: "/not-used", settingsManager, commandName: "model", sink });
+		expect(sink.events).toEqual([]);
+		expect(isTelemetryEnabled(settingsManager)).toBe(false);
+		settingsManager.setTelemetryEnabled(true);
+		expect(isTelemetryEnabled(settingsManager)).toBe(true);
+		await captureAgentCommandUsed({ agentDir: "/not-used", settingsManager, commandName: "model", sink });
+		expect(sink.events).toHaveLength(1);
+	});
+
 	it("persists a stable 0600 installation id and replaces invalid state", () => {
 		const agentDir = mkdtempSync(join(tmpdir(), "prime-agent-telemetry-"));
 		const path = join(agentDir, "telemetry.json");

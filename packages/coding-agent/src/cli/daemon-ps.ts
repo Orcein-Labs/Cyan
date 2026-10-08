@@ -186,9 +186,34 @@ export function parsePsEtimes(stdout: string): Map<number, number> {
  * isolated HOME or a different agent dir, so the result is filtered before any
  * caller can list, signal or reap it.
  */
-function scanListeningDaemons(): DiscoveredDaemonProcess[] {
-	const belongsToStateRoot = createDaemonStateRootMatcher();
-	return scanAllListeningDaemons().filter((daemon) => belongsToStateRoot(daemon.socketPath));
+function scanListeningDaemons(socketPathScope?: string): DiscoveredDaemonProcess[] {
+	// An explicit socket path is itself the scope; it may intentionally live
+	// outside the invocation's default state root.
+	const belongsToStateRoot = socketPathScope === undefined ? createDaemonStateRootMatcher() : () => true;
+	return scanAllListeningDaemons().filter(
+		(daemon) => belongsToStateRoot(daemon.socketPath) && isInSocketPathScope(daemon.socketPath, socketPathScope),
+	);
+}
+
+/**
+ * Cyan gives its default daemon a dedicated socket under its agent directory.
+ * Keep shutdown scoped to that socket so a shared per-user socket directory
+ * cannot make `cyan shutdown` stop upstream daemons too.
+ */
+export function shutdownSocketPathScope(explicitSocketPath?: string): string | undefined {
+	if (explicitSocketPath !== undefined) {
+		return normalizeSocketPath(explicitSocketPath);
+	}
+	const agentDir =
+		process.env.CYAN_AGENT_DIR ?? process.env.CYAN_CODING_AGENT_DIR ?? process.env.PRIME_AGENT_CODING_AGENT_DIR;
+	if (process.platform === "win32" || !process.env.CYAN_SUBSTRATE || !agentDir) {
+		return undefined;
+	}
+	return normalizeSocketPath(defaultDaemonSocketPath());
+}
+
+function isInSocketPathScope(socketPath: string, socketPathScope: string | undefined): boolean {
+	return socketPathScope === undefined || normalizeSocketPath(socketPath) === normalizeSocketPath(socketPathScope);
 }
 
 function scanAllListeningDaemons(): DiscoveredDaemonProcess[] {
@@ -217,9 +242,9 @@ function scanAllListeningDaemons(): DiscoveredDaemonProcess[] {
 	return enrichUptimes(mergeDiscoveredDaemonProcesses(byName, byPid));
 }
 
-function isDaemonProcessListening(pid: number, socketPath: string): boolean {
+function isDaemonProcessListening(pid: number, socketPath: string, socketPathScope?: string): boolean {
 	const target = normalizeSocketPath(socketPath);
-	return scanListeningDaemons().some((daemon) => daemon.pid === pid && daemon.socketPath === target);
+	return scanListeningDaemons(socketPathScope).some((daemon) => daemon.pid === pid && daemon.socketPath === target);
 }
 
 function enrichUptimes(daemons: DiscoveredDaemonProcess[]): DiscoveredDaemonProcess[] {
@@ -358,10 +383,10 @@ export function verifyHelloSupervisorPid(
 	return pid;
 }
 
-/** Discover every daemon in this state root and probe each for version + session count. */
-export async function discoverDaemons(): Promise<DaemonInfo[]> {
+/** Discover every daemon in this state root, or one selected socket, and probe each for status. */
+export async function discoverDaemons(socketPathScope?: string): Promise<DaemonInfo[]> {
 	const processBySocket = new Map<string, DiscoveredDaemonProcess>();
-	for (const daemon of scanListeningDaemons()) {
+	for (const daemon of scanListeningDaemons(socketPathScope)) {
 		if (isWorkerSocketPath(daemon.socketPath)) {
 			continue;
 		}
@@ -369,11 +394,16 @@ export async function discoverDaemons(): Promise<DaemonInfo[]> {
 	}
 
 	const workerSockets = new Set(
-		findAllTrackedWorkers().map((worker) => normalizeSocketPath(worker.descriptor.supervisorSocketPath)),
+		findAllTrackedWorkers()
+			.map((worker) => normalizeSocketPath(worker.descriptor.supervisorSocketPath))
+			.filter((socketPath) => isInSocketPathScope(socketPath, socketPathScope)),
 	);
 	const sockets = new Set<string>([
 		...processBySocket.keys(),
-		...scanSocketDir().filter((socketPath) => !isWorkerSocketPath(socketPath)),
+		...(socketPathScope === undefined ? [] : [normalizeSocketPath(socketPathScope)]),
+		...scanSocketDir().filter(
+			(socketPath) => !isWorkerSocketPath(socketPath) && isInSocketPathScope(socketPath, socketPathScope),
+		),
 		...workerSockets,
 	]);
 	const defaultSocket = normalizeSocketPath(defaultDaemonSocketPath());
@@ -475,7 +505,11 @@ export function planReap(daemons: readonly DaemonInfo[], force: boolean): ReapAc
 		}
 		if (daemon.status === "unreachable") {
 			if (!force || daemon.pid === undefined) {
-				return { kind: "skip", daemon, reason: 'unreachable; use "prime-agent shutdown --force" to stop it' };
+				return {
+					kind: "skip",
+					daemon,
+					reason: `unreachable; use "${APP_NAME} shutdown --force" to stop it`,
+				};
 			}
 			if ((pidCounts.get(daemon.pid) ?? 0) > 1) {
 				return {
@@ -530,8 +564,9 @@ export function planShutdownConfirmation(
 	return stdinIsTTY ? "prompt" : "tty-error";
 }
 
-export async function runShutdownAll(json: boolean, force: boolean): Promise<void> {
-	const daemons = await discoverDaemons();
+export async function runShutdownAll(json: boolean, force: boolean, explicitSocketPath?: string): Promise<void> {
+	const socketPathScope = shutdownSocketPathScope(explicitSocketPath);
+	const daemons = await discoverDaemons(socketPathScope);
 	switch (planShutdownConfirmation(daemons.length, json, force, process.stdin.isTTY)) {
 		case "json-error":
 			process.exitCode = 1;
@@ -541,7 +576,7 @@ export async function runShutdownAll(json: boolean, force: boolean): Promise<voi
 						stopped: [],
 						failed: daemons.map(({ socketPath }) => ({
 							socketPath,
-							reason: 'confirmation required; use "prime-agent shutdown --force --json"',
+							reason: `confirmation required; use "${APP_NAME} shutdown --force --json"`,
 						})),
 					},
 					null,
@@ -551,7 +586,7 @@ export async function runShutdownAll(json: boolean, force: boolean): Promise<voi
 			return;
 		case "tty-error":
 			throw new Error(
-				'Shutdown requires confirmation in an interactive terminal. Use "prime-agent shutdown --force".',
+				`Shutdown requires confirmation in an interactive terminal. Use "${APP_NAME} shutdown --force".`,
 			);
 		case "prompt": {
 			const confirmed = await promptYesNo(
@@ -568,7 +603,7 @@ export async function runShutdownAll(json: boolean, force: boolean): Promise<voi
 	}
 	const admission = await acquireDaemonShutdownAdmission();
 	try {
-		await runShutdownAllConverging(json, force, () => admission.assertOrRenew());
+		await runShutdownAllConverging(json, force, () => admission.assertOrRenew(), socketPathScope);
 	} finally {
 		await admission.release();
 	}
@@ -578,6 +613,7 @@ async function runShutdownAllConverging(
 	json: boolean,
 	force: boolean,
 	assertAdmission: () => Promise<void>,
+	socketPathScope?: string,
 ): Promise<void> {
 	const stopped: Array<{ socketPath: string; action: string }> = [];
 	const failed: Array<{ socketPath: string; reason: string }> = [];
@@ -585,9 +621,9 @@ async function runShutdownAllConverging(
 	const reportedFailures = new Set<string>();
 
 	if (force) {
-		await stopHiddenSupervisors(stopped, failed, handledPids, reportedFailures, assertAdmission);
+		await stopHiddenSupervisors(stopped, failed, handledPids, reportedFailures, assertAdmission, socketPathScope);
 	}
-	const daemons = (await discoverDaemons()).filter((daemon) => !isWorkerSocketPath(daemon.socketPath));
+	const daemons = (await discoverDaemons(socketPathScope)).filter((daemon) => !isWorkerSocketPath(daemon.socketPath));
 
 	const actions = [...planShutdownAll(daemons, force)].sort(
 		(left, right) => SHUTDOWN_ALL_ACTION_ORDER[left.kind] - SHUTDOWN_ALL_ACTION_ORDER[right.kind],
@@ -636,7 +672,7 @@ async function runShutdownAllConverging(
 						stopped,
 						failed,
 					);
-				} else if (isDaemonProcessListening(pid!, socketPath)) {
+				} else if (isDaemonProcessListening(pid!, socketPath, socketPathScope)) {
 					await assertAdmission();
 					await forceKillDaemon(pid!);
 					handledPids.add(pid!);
@@ -670,7 +706,14 @@ async function runShutdownAllConverging(
 	}
 
 	if (force) {
-		await terminateVerifiedResiduals(stopped, failed, handledPids, reportedFailures, assertAdmission);
+		await terminateVerifiedResiduals(
+			stopped,
+			failed,
+			handledPids,
+			reportedFailures,
+			assertAdmission,
+			socketPathScope,
+		);
 	}
 
 	if (json) {
@@ -701,12 +744,15 @@ async function stopHiddenSupervisors(
 	handledPids: Set<number>,
 	reportedFailures: Set<string>,
 	assertAdmission: () => Promise<void>,
+	socketPathScope?: string,
 ): Promise<void> {
 	while (true) {
 		// Renew before the scan: scanListeningDaemons blocks the event loop in synchronous ps/lsof/ss
 		// calls, and the admission lease cannot refresh itself while that runs.
 		await assertAdmission();
-		const listeners = scanListeningDaemons().filter((listener) => !isWorkerSocketPath(listener.socketPath));
+		const listeners = scanListeningDaemons(socketPathScope).filter(
+			(listener) => !isWorkerSocketPath(listener.socketPath),
+		);
 		const bySocket = new Map<string, DiscoveredDaemonProcess[]>();
 		for (const listener of listeners) {
 			const group = bySocket.get(listener.socketPath) ?? [];
@@ -740,7 +786,7 @@ async function stopHiddenSupervisors(
 				stopped.push({ socketPath: listener.socketPath, action: `stopped hidden daemon (pid ${listener.pid})` });
 			}
 		}
-		const afterHidden = scanListeningDaemons().filter(
+		const afterHidden = scanListeningDaemons(socketPathScope).filter(
 			(listener) =>
 				!isWorkerSocketPath(listener.socketPath) &&
 				hidden.some((candidate) => candidate.pid === listener.pid && candidate.socketPath === listener.socketPath),
@@ -757,13 +803,14 @@ async function terminateVerifiedResiduals(
 	handledPids: Set<number>,
 	reportedFailures: Set<string>,
 	assertAdmission: () => Promise<void>,
+	socketPathScope?: string,
 ): Promise<void> {
 	let previousSignature: string | undefined;
 	let quietSince: number | undefined;
 	const deadline = Date.now() + SHUTDOWN_CONVERGENCE_TIMEOUT_MS;
 	while (true) {
 		await assertAdmission();
-		const listeners = scanListeningDaemons();
+		const listeners = scanListeningDaemons(socketPathScope);
 		const now = Date.now();
 		if (listeners.length === 0) {
 			previousSignature = undefined;

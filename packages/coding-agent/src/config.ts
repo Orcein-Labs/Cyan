@@ -344,6 +344,7 @@ export function getSelfUpdateUnavailableInstruction(
 }
 
 export function getUpdateInstruction(packageName: string): string {
+	if (APP_NAME === "cyan") return "Update Cyan from its source checkout; no Cyan binary release is configured.";
 	if (isBunBinary && getNativeInstallationTarget()) return `Run: ${APP_NAME} update`;
 	const method = detectInstallMethod();
 	const command = getSelfUpdateCommandForMethod(method, packageName);
@@ -494,7 +495,7 @@ const envPrefix =
 export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent";
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
-export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".prime/agent";
+export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".cyan/agent";
 export const VERSION: string = pkg.version || "0.0.0";
 
 // e.g., PI_CODING_AGENT_DIR or PRIME_AGENT_CODING_AGENT_DIR
@@ -519,12 +520,12 @@ export function getShareViewerUrl(gistId: string): string {
 }
 
 // =============================================================================
-// User Config Paths (~/.prime/agent/*)
+// User Config Paths (~/.cyan/agent/*)
 // =============================================================================
 
-/** Get the agent config directory (e.g., ~/.prime/agent/) */
+/** Get the agent config directory (e.g., ~/.cyan/agent/) */
 export function getAgentDir(): string {
-	const envDir = process.env[ENV_AGENT_DIR];
+	const envDir = process.env.CYAN_AGENT_DIR ?? process.env[ENV_AGENT_DIR] ?? process.env.PRIME_AGENT_CODING_AGENT_DIR;
 	if (envDir) {
 		return expandTildePath(envDir);
 	}
@@ -557,7 +558,7 @@ export function getMcpCacheDir(): string {
 	return join(getAgentDir(), "mcp");
 }
 
-/** Directory where daemon and client diagnostic logs are written (e.g. ~/.prime/agent/logs/). */
+/** Directory where daemon and client diagnostic logs are written (e.g. ~/.cyan/agent/logs/). */
 export function getLogsDir(): string {
 	return join(getAgentDir(), "logs");
 }

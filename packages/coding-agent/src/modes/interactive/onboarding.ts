@@ -21,8 +21,7 @@ export function isOnboardingModelReady(state: OnboardingStartupState): boolean {
 
 /**
  * First launch is defined by the settings flag alone. Credentials found on disk
- * (a Prime CLI token, an API key in the environment) no longer skip the flow:
- * they only make the sign-in step instant.
+ * or local model configuration is checked by the flow before opening setup.
  */
 export function shouldRunOnboarding(state: OnboardingStartupState): boolean {
 	if (state.settingsManager.getOnboardingShown()) {

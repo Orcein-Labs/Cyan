@@ -68,6 +68,11 @@ export interface DaemonSocketIdentity {
 }
 
 export function defaultDaemonSocketPath(): string {
+	const cyanAgentDir =
+		process.env.CYAN_AGENT_DIR ?? process.env.CYAN_CODING_AGENT_DIR ?? process.env.PRIME_AGENT_CODING_AGENT_DIR;
+	if (process.env.CYAN_SUBSTRATE && cyanAgentDir && process.platform !== "win32") {
+		return join(cyanAgentDir, "daemon.sock");
+	}
 	if (process.platform === "win32") {
 		return "\\\\.\\pipe\\prime-agent-daemon";
 	}

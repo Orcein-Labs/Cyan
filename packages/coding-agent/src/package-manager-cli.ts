@@ -406,9 +406,9 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 	}
 
 	if (rollback && (extensionsFlag || extensionFlagSource || (source && !isSelfUpdateSource(source))))
-		conflictingOptions = "--rollback only applies to Prime Agent itself";
+		conflictingOptions = `--rollback only applies to ${APP_NAME} itself`;
 	if (channel && (extensionsFlag || extensionFlagSource || (source && !isSelfUpdateSource(source))))
-		conflictingOptions = conflictingOptions ?? "--nightly and --stable only apply to Prime Agent itself";
+		conflictingOptions = conflictingOptions ?? `--nightly and --stable only apply to ${APP_NAME} itself`;
 	return {
 		command,
 		source,
@@ -464,7 +464,7 @@ function printSelfUpdateUnavailable(
 	const entrypoint = process.argv[1];
 	if (entrypoint) {
 		console.error("");
-		console.error(`Location of pi executable: ${entrypoint}`);
+		console.error(`Location of Cyan executable: ${entrypoint}`);
 	}
 }
 
@@ -592,16 +592,14 @@ async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
 	}
 }
 
-const UPDATE_RESTART_CONTINUATION_PROMPT =
-	"Prime Agent restarted after an update. Continue the interrupted task from the saved transcript and restored tool/kernel state. Inspect current state before retrying commands when needed.";
+const UPDATE_RESTART_CONTINUATION_PROMPT = `${APP_NAME} restarted after an update. Continue the interrupted task from the saved transcript and restored tool/kernel state. Inspect current state before retrying commands when needed.`;
 
 const UPDATE_SESSION_LOSS_COPY: DaemonSessionLossCopy = {
 	busyDetail(count) {
 		const { noun, pronoun } = pluralizeSessions(count);
-		return `Prime Agent has ${count} busy ${noun}. After the update installs, it will stop ${pronoun}, restart its background service, and resume interrupted work.`;
+		return `${APP_NAME} has ${count} busy ${noun}. After the update installs, it will stop ${pronoun}, restart its background service, and resume interrupted work.`;
 	},
-	unlistableDetail:
-		"Running agents could not be listed. After the update installs, Prime Agent will stop resident agents, restart its background service, and resume interrupted work where possible.",
+	unlistableDetail: `Running agents could not be listed. After the update installs, ${APP_NAME} will stop resident agents, restart its background service, and resume interrupted work where possible.`,
 	question: "Continue?",
 	nonTtyHint: "Re-run with --force to proceed.",
 };
@@ -1121,7 +1119,7 @@ async function restoreDaemonUpdateRestartSession(
 					activeSessionId,
 					message: {
 						customType: "prime-agent.update_complete",
-						content: `[update-complete]\n\nPrime Agent updated to v${VERSION}. This daemon session was restored after the update.`,
+						content: `[update-complete]\n\n${APP_NAME} updated to v${VERSION}. This daemon session was restored after the update.`,
 						display: true,
 						details: { version: VERSION },
 					},
@@ -1521,6 +1519,20 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 
 	if (options.help) {
 		printPackageCommandHelp(options.command);
+		return true;
+	}
+
+	if (
+		APP_NAME === "cyan" &&
+		options.command === "update" &&
+		(options.restartCoordinator || updateTargetIncludesSelf(options.updateTarget ?? { type: "all" }))
+	) {
+		console.error(
+			chalk.red(
+				"Cyan is maintained from its source checkout. Update that checkout; upstream binary updates are disabled.",
+			),
+		);
+		setSelfUpdateAbortedExitCode();
 		return true;
 	}
 

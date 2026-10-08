@@ -180,9 +180,10 @@ describe("ProviderAuthFlows", () => {
 		process.env.HOME = tempDir;
 		vi.stubEnv(ENV_AGENT_DIR, "");
 		vi.stubEnv("PI_OFFLINE", "1");
-		authJsonPath = join(tempDir, ".prime", "agent", "auth.json");
+		authJsonPath = join(tempDir, ".cyan", "agent", "auth.json");
 		primeConfigPath = join(tempDir, ".prime", "config.json");
-		mkdirSync(join(tempDir, ".prime", "agent"), { recursive: true });
+		mkdirSync(join(tempDir, ".cyan", "agent"), { recursive: true });
+		mkdirSync(join(tempDir, ".prime"), { recursive: true });
 		process.env.PRIME_TEAM_ID = "env-team";
 		writeFileSync(
 			primeConfigPath,

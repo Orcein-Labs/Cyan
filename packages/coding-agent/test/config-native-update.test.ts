@@ -64,11 +64,7 @@ console.log(getUpdateInstruction('prime-agent'));
 						env: { ...process.env, PI_PACKAGE_DIR: resolve(__dirname, "..") },
 					},
 				);
-				expect(output.trim()).toBe(
-					state === "unmanaged"
-						? "Download from: https://github.com/PrimeIntellect-ai/prime-agent/releases/latest"
-						: "Run: prime-agent update",
-				);
+				expect(output.trim()).toBe("Update Cyan from its source checkout; no Cyan binary release is configured.");
 			} finally {
 				rmSync(root, { recursive: true, force: true });
 			}

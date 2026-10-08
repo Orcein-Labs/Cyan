@@ -66,6 +66,11 @@ async function runPublicCommand(args: string[]): Promise<PublicCommandResult> {
 	if (!PUBLIC_COMMAND_NAMES.has(command)) {
 		return continueWith(args);
 	}
+	if (command === "update" && APP_NAME === "cyan" && !args.includes("--help") && !args.includes("-h")) {
+		return fail(
+			"Cyan is maintained from its source checkout. Update that checkout; upstream binary updates are disabled.",
+		);
+	}
 	if (command === "update" && process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] === "1") {
 		await handlePackageCommand(args);
 		return HANDLED;
@@ -139,7 +144,7 @@ async function runPublicCommand(args: string[]): Promise<PublicCommandResult> {
 			);
 			if (hasLegacySelfTarget && hasLegacyPackageTarget) {
 				return fail(
-					"Prime Agent and package updates are now separate.",
+					`${APP_NAME} and package updates are now separate.`,
 					`Run "${APP_NAME} update [--force]" and "${APP_NAME} package update [source]" separately.`,
 				);
 			}
@@ -211,15 +216,15 @@ function rejectRemovedCommand(args: string[]): PublicCommandResult {
 	const [command, subcommand] = args;
 	let replacement: string | undefined;
 	if (command === "daemon") {
-		replacement = 'Run "prime-agent help" to see the agent commands.';
+		replacement = `Run "${APP_NAME} help" to see the agent commands.`;
 	} else if (command === "app" && subcommand === "update") {
-		replacement = 'Use "prime-agent update".';
+		replacement = `Use "${APP_NAME} update".`;
 	} else if (command === "install") {
-		replacement = 'Use "prime-agent package install".';
+		replacement = `Use "${APP_NAME} package install".`;
 	} else if (command === "remove" || command === "uninstall") {
-		replacement = 'Use "prime-agent package remove".';
+		replacement = `Use "${APP_NAME} package remove".`;
 	} else if (command === "manage") {
-		replacement = 'Use "prime-agent agents".';
+		replacement = `Use "${APP_NAME} agents".`;
 	}
 	return fail(`Unknown command: ${args.slice(0, 2).join(" ")}`, replacement);
 }
@@ -286,9 +291,22 @@ async function runIncidentCommand(args: string[]): Promise<PublicCommandResult> 
 }
 
 async function runShutdown(args: string[]): Promise<PublicCommandResult> {
-	const options = parseBooleanOptions(args, new Set(["--force", "--json"]), "shutdown");
+	let socketPath: string | undefined;
+	const flags: string[] = [];
+	for (let index = 0; index < args.length; index++) {
+		if (args[index] === "--daemon-socket") {
+			const value = args[++index];
+			if (!value || value.startsWith("-") || socketPath !== undefined) {
+				return fail("shutdown requires one path after --daemon-socket.");
+			}
+			socketPath = value;
+		} else {
+			flags.push(args[index]!);
+		}
+	}
+	const options = parseBooleanOptions(flags, new Set(["--force", "--json"]), "shutdown");
 	if (!options) return HANDLED;
-	await runShutdownAll(options.has("--json"), options.has("--force"));
+	await runShutdownAll(options.has("--json"), options.has("--force"), socketPath);
 	return HANDLED;
 }
 
@@ -321,14 +339,14 @@ async function runPackage(args: string[]): Promise<PublicCommandResult> {
 			rest.some((arg) => arg === "--self" || arg === "--extensions" || arg === "--extension" || arg === "--force")
 		) {
 			return fail(
-				'Package updates accept only an optional source. Use "prime-agent update --force" to update Prime Agent.',
+				`Package updates accept only an optional source. Use "${APP_NAME} update --force" to update ${APP_NAME}.`,
 			);
 		}
 		if (rest.length > 1) {
 			return fail(`Usage: ${APP_NAME} package update [source]`);
 		}
 		if (rest[0] && isSelfUpdateSource(rest[0])) {
-			return fail('Use "prime-agent update" to update Prime Agent.');
+			return fail(`Use "${APP_NAME} update" to update ${APP_NAME}.`);
 		}
 		await handlePackageCommand(["update", ...(rest.length === 0 ? ["--extensions"] : rest)]);
 		return HANDLED;

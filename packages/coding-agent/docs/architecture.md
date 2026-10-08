@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Prime Agent separates terminal presentation, process coordination, agent execution, model-facing Python, and persisted state. Normal interactive sessions use the daemon-backed path below; explicit SDK and fallback integrations can run the same `AgentSessionRuntime` in process.
+Cyan separates terminal presentation, process coordination, agent execution, the selected model-facing kernel, and persisted state. Normal interactive sessions use the daemon-backed path below; explicit SDK and fallback integrations can run the same `AgentSessionRuntime` in process.
 
 ## System at a Glance
 
@@ -16,7 +16,7 @@ flowchart LR
         runtime["AgentSessionRuntime"]
         root["Root AgentSession"]
         scheduler["Scheduler"]
-        kernel["Root Python kernel"]
+        kernel["Root Julia Palette kernel"]
         children["RLM child runtimes<br/>session + optional kernel"]
 
         runtime --> root
@@ -44,7 +44,7 @@ flowchart LR
 - The supervisor owns discovery, routing, attachments, worker health, and cross-agent message delivery.
 - Each worker owns one root runtime, its scheduler, kernels, and all descendants below that root.
 - `AgentSession` owns provider calls, queues, tools, compaction, goals, child lifecycles, and transcript writes.
-- The Python REPL is the model-facing control environment. Typed host requests return authoritative operations to the TypeScript session.
+- Julia Palette is the default model-facing control environment; IPython is an explicitly selected alternate. Typed host requests return authoritative operations to the TypeScript session.
 
 Workers and kernels are separate processes for lifecycle and failure containment, not security sandboxes. They normally run with the same operating-system permissions as the client.
 
@@ -58,7 +58,7 @@ sequenceDiagram
     participant W as Session worker
     participant A as AgentSession
     participant P as Model provider
-    participant K as Python kernel
+    participant K as Selected kernel
     participant D as Session storage
 
     U->>C: prompt, steer, or follow-up
@@ -66,9 +66,9 @@ sequenceDiagram
     S->>W: route to active session
     W->>A: enqueue prompt
     A->>P: stream model request
-    P-->>A: text or Python tool call
-    opt Python tool call
-        A->>K: execute Python
+    P-->>A: text or kernel tool call
+    opt Kernel tool call
+        A->>K: execute selected substrate code
         alt Typed host request
             K->>A: request host operation
             A-->>K: host result

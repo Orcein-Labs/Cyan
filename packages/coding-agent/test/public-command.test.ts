@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
 	packageCommands: [] as string[][],
 	psCalls: [] as boolean[],
 	reapCalls: [] as Array<[boolean, boolean]>,
-	shutdownCalls: [] as Array<[boolean, boolean]>,
+	shutdownCalls: [] as Array<[boolean, boolean, string | undefined]>,
 	mcpCommands: [] as string[][],
 	incidentCalls: [] as Array<Record<string, string | undefined>>,
 	incidentWindows: [] as Array<{ sinceMs: number; untilMs: number } | undefined>,
@@ -55,8 +55,8 @@ vi.mock("../src/cli/daemon-ps.js", () => ({
 	runReap: async (json: boolean, force: boolean) => {
 		mocks.reapCalls.push([json, force]);
 	},
-	runShutdownAll: async (json: boolean, force: boolean) => {
-		mocks.shutdownCalls.push([json, force]);
+	runShutdownAll: async (json: boolean, force: boolean, socketPath?: string) => {
+		mocks.shutdownCalls.push([json, force, socketPath]);
 	},
 }));
 
@@ -353,30 +353,31 @@ describe("public command routing", () => {
 
 	it("shows sessions usage in command help", async () => {
 		await expect(handlePublicCommand(["help", "sessions"])).resolves.toMatchObject({ handled: true });
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("prime-agent sessions [--all] [--json]"));
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("cyan sessions [--all] [--json]"));
 	});
 
-	it("separates Prime Agent updates from package updates", async () => {
+	it("blocks Cyan self-update while allowing package updates", async () => {
 		await handlePublicCommand(["update", "--force"]);
 		await handlePublicCommand(["package", "update"]);
 		await handlePublicCommand(["package", "update", "npm:@example/tools"]);
 
 		expect(mocks.packageCommands).toEqual([
-			["update", "--self", "--force"],
 			["update", "--extensions"],
 			["update", "npm:@example/tools"],
 		]);
 	});
 
-	it("forwards hidden update restart coordinator invocations", async () => {
+	it("rejects hidden upstream update restart invocations", async () => {
 		const args = ["update", DAEMON_UPDATE_RESTART_COORDINATOR_FLAG, "--daemon-socket", "custom-daemon.sock"];
 
 		await handlePublicCommand(args);
 
-		expect(mocks.packageCommands).toEqual([args]);
+		expect(mocks.packageCommands).toEqual([]);
+		expect(process.exitCode).toBe(1);
+		expect(console.error).toHaveBeenCalledWith(expect.stringContaining("upstream binary updates are disabled"));
 	});
 
-	it("preserves the internal interactive self-update command", async () => {
+	it("rejects the internal upstream self-update command", async () => {
 		const previousValue = process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV];
 		const args = ["update", "--self", "--force", "--daemon-socket", "custom-daemon.sock"];
 		process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] = "1";
@@ -391,7 +392,9 @@ describe("public command routing", () => {
 			}
 		}
 
-		expect(mocks.packageCommands).toEqual([args]);
+		expect(mocks.packageCommands).toEqual([]);
+		expect(process.exitCode).toBe(1);
+		expect(console.error).toHaveBeenCalledWith(expect.stringContaining("upstream binary updates are disabled"));
 	});
 
 	it.each<[string[]]>([
@@ -420,9 +423,17 @@ describe("public command routing", () => {
 		await handlePublicCommand(["shutdown", "--force"]);
 
 		expect(mocks.shutdownCalls).toEqual([
-			[true, false],
-			[false, true],
+			[true, false, undefined],
+			[false, true, undefined],
 		]);
+	});
+
+	it("forwards an exact selected shutdown socket and rejects a missing path", async () => {
+		await handlePublicCommand(["--daemon-socket", "/tmp/cyan-selected.sock", "shutdown", "--force"]);
+		expect(mocks.shutdownCalls).toEqual([[false, true, "/tmp/cyan-selected.sock"]]);
+		await handlePublicCommand(["shutdown", "--daemon-socket", "--force"]);
+		expect(process.exitCode).toBe(1);
+		expect(mocks.shutdownCalls).toHaveLength(1);
 	});
 
 	it("routes doctor fixes through the safe cleanup path", async () => {
@@ -443,21 +454,21 @@ describe("public command routing", () => {
 
 	it("keeps the help topic when an explicit help flag follows it", async () => {
 		await expect(handlePublicCommand(["help", "status", "--help"])).resolves.toMatchObject({ handled: true });
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("prime-agent status [--json]"));
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("cyan status [--json]"));
 		await expect(handlePublicCommand(["--offline", "help", "mcp", "add", "-h"])).resolves.toMatchObject({
 			handled: true,
 		});
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("prime-agent mcp add <name>"));
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("cyan mcp add <name>"));
 		await expect(handlePublicCommand(["help", "--help"])).resolves.toMatchObject({ handled: true });
-		expect(console.log).toHaveBeenLastCalledWith(expect.not.stringContaining("prime-agent status [--json]"));
+		expect(console.log).toHaveBeenLastCalledWith(expect.not.stringContaining("cyan status [--json]"));
 		expect(mocks.daemonCommands).toEqual([]);
 	});
 
 	it("treats help written after global flags as a help request", async () => {
 		await expect(handlePublicCommand(["--offline", "help"])).resolves.toMatchObject({ handled: true });
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("prime-agent - AI coding assistant"));
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("cyan - AI coding assistant"));
 		await expect(handlePublicCommand(["--offline", "help", "status"])).resolves.toMatchObject({ handled: true });
-		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("prime-agent status [--json]"));
+		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("cyan status [--json]"));
 		expect(mocks.daemonCommands).toEqual([]);
 		expect(process.exitCode).toBeUndefined();
 	});
@@ -466,30 +477,30 @@ describe("public command routing", () => {
 		await expect(handlePublicCommand(["--offline", "help", "mcp", "add"])).resolves.toMatchObject({
 			handled: true,
 		});
-		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("prime-agent mcp add <name>"));
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("cyan mcp add <name>"));
 
 		await expect(handlePublicCommand(["help", "--verbose"])).resolves.toMatchObject({ handled: true });
-		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("prime-agent - AI coding assistant"));
+		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("cyan - AI coding assistant"));
 	});
 
 	it("excludes parseArgs-consumed flag values from the help command path", async () => {
 		await expect(handlePublicCommand(["help", "--resume", "status"])).resolves.toMatchObject({
 			handled: true,
 		});
-		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("prime-agent - AI coding assistant"));
+		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("cyan - AI coding assistant"));
 		await expect(handlePublicCommand(["help", "-r", "status"])).resolves.toMatchObject({ handled: true });
-		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("prime-agent - AI coding assistant"));
+		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("cyan - AI coding assistant"));
 		await expect(handlePublicCommand(["help", "--print", "status"])).resolves.toMatchObject({
 			handled: true,
 		});
-		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("prime-agent - AI coding assistant"));
+		expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining("cyan - AI coding assistant"));
 
 		// The print flag must not swallow the help flag itself: an explicit
 		// --help still defers to the per-command help block.
 		await expect(handlePublicCommand(["help", "--print", "--help"])).resolves.toMatchObject({
 			handled: true,
 		});
-		expect(console.log).toHaveBeenLastCalledWith(expect.not.stringContaining("prime-agent status [--json]"));
+		expect(console.log).toHaveBeenLastCalledWith(expect.not.stringContaining("cyan status [--json]"));
 	});
 
 	it("keeps a -- after the help command on the message path", async () => {
@@ -548,7 +559,7 @@ describe("public command routing", () => {
 		).resolves.toMatchObject({ handled: true });
 		expect(process.exitCode).toBe(1);
 		expect(console.error).toHaveBeenCalledWith(expect.stringContaining("--until must be after --since."));
-		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Run "prime-agent help incident" for usage.'));
+		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Run "cyan help incident" for usage.'));
 		expect(mocks.incidentCalls).toEqual([]);
 	});
 
@@ -556,7 +567,7 @@ describe("public command routing", () => {
 		await expect(handlePublicCommand(["incident", "--since", "yesterday"])).resolves.toMatchObject({ handled: true });
 		expect(process.exitCode).toBe(1);
 		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Invalid time for --since: "yesterday"'));
-		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Run "prime-agent help incident" for usage.'));
+		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Run "cyan help incident" for usage.'));
 		expect(mocks.incidentCalls).toEqual([]);
 	});
 

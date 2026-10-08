@@ -66,6 +66,7 @@ import {
 	getLogsDir,
 	getMcpCacheDir,
 	getShareViewerUrl,
+	getUpdateInstruction,
 	SELF_UPDATE_INTERACTIVE_CHILD_ENV,
 	SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE,
 	VERSION,
@@ -157,7 +158,7 @@ import {
 } from "../../core/messages.js";
 import { findExactModelReferenceMatch, resolveModelScopeFromModels } from "../../core/model-resolver.js";
 import { parseNewSessionCommand } from "../../core/new-session-command.js";
-import { PRIME_INFERENCE_PROVIDER_ID, resolvePrimeAgentTracesBaseUrl } from "../../core/prime-inference-auth.js";
+import { resolvePrimeAgentTracesBaseUrl } from "../../core/prime-inference-auth.js";
 import { resolvePrimeInferencePostLoginModelAction } from "../../core/prime-inference-model-selection.js";
 import { parseCommandArgs } from "../../core/prompt-templates.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
@@ -178,7 +179,7 @@ import {
 	type TelemetryOnboardingOutcome,
 } from "../../core/telemetry.js";
 import { type TruncationResult, truncateTail } from "../../core/tools/truncate.js";
-import { PRIME_COMPACT_BUTTERFLY_LOGO } from "../../themes/prime-logo.js";
+import { CYAN_LOGO } from "../../themes/cyan-logo.js";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog.js";
 import { spawnHidden, spawnSyncHidden } from "../../utils/child-process.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
@@ -264,8 +265,6 @@ import {
 import { McpTokenPastePanelComponent } from "./components/mcp-token-paste-panel.js";
 import { createMermaidMarkdownTransform } from "./components/mermaid.js";
 import type { AuthSelectorProvider } from "./components/oauth-selector.js";
-import { OnboardingChoiceComponent } from "./components/onboarding-choice.js";
-import { OnboardingPickerComponent } from "./components/onboarding-picker.js";
 import { PrimeOnboardingSplashComponent } from "./components/prime-onboarding-splash.js";
 import { PromptContextLine } from "./components/prompt-context-line.js";
 import { styleArgumentTokens } from "./components/prompt-highlight.js";
@@ -517,7 +516,7 @@ export class BrandSplashHeader implements Component {
 		private readonly verboseInstructions?: string,
 		private readonly options: BrandSplashHeaderOptions = {},
 	) {
-		this.logoRaw = (options.logo ?? PRIME_COMPACT_BUTTERFLY_LOGO).split("\n");
+		this.logoRaw = (options.logo ?? CYAN_LOGO).split("\n");
 		this.logoCanvasWidth = this.logoRaw.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
 	}
 
@@ -536,7 +535,7 @@ export class BrandSplashHeader implements Component {
 		const metaWidth = showLogo ? contentWidth - this.logoCanvasWidth - this.gutter : contentWidth;
 		const extraMetadata = this.options.getExtraMetadata?.() ?? [];
 		const version = theme.fg("muted", `v${this.version}`);
-		const titleText = "prime agent";
+		const titleText = "Cyan";
 		const title = theme.fg("text", titleText);
 		const modelLabel = "model ";
 		const cwdLabel = "cwd ";
@@ -1949,7 +1948,7 @@ export class InteractiveMode {
 		// `returnToAgentsView`, which is also set for direct daemon attaches that never
 		// rendered the agents view and still want the in-session fallback.)
 		const ownsGlobalStartupNotices = !this.options.agentsViewOwnsStartupNotices;
-		const newVersionPromise = ownsGlobalStartupNotices
+		const newVersionPromise = ownsGlobalStartupNotices && APP_NAME !== "cyan"
 			? checkForNewPiVersion(this.version, this.settingsManager.getUpdateChannel())
 			: undefined;
 		const packageUpdatesPromise = ownsGlobalStartupNotices
@@ -2221,171 +2220,21 @@ export class InteractiveMode {
 		}
 	}
 
-	/** Runs the first-launch sequence. Resolves true only when every step ran. */
+	/** Configure a supported provider or local model before the first chat. */
 	private async runOnboardingFlow(): Promise<boolean> {
 		this.modelRegistry.refresh();
-
-		// Existing users (working model with configured auth) skip login and
-		// the provider picker entirely. They see only the trace question, or
-		// nothing at all when traces are already enabled.
 		if (isOnboardingModelReady(this.getOnboardingState())) {
-			if (this.settingsManager.getAgentTracesEnabled()) {
-				return true;
-			}
-			const abort = new AbortController();
-			this.onboardingFlowAbort = abort;
-			const splash = await this.showOnboardingSplash({ immediate: true });
-			if (!splash) {
-				return false;
-			}
-			await this.askOnboardingTraceOptIn();
-			if (abort.signal.aborted) {
-				return false;
-			}
-			splash.dismiss();
 			return true;
 		}
-
 		const abort = new AbortController();
 		this.onboardingFlowAbort = abort;
 		const splash = await this.showOnboardingSplash();
-		if (!splash) {
-			return false;
-		}
-
-		// One sequence for every first launch. Signing in is instant when a Prime
-		// CLI token is already on disk, so users who arrive with credentials still
-		// reach the same account, provider and trace questions.
-		const authResult = await this.createAuthFlows().runPrimeInferenceLogin();
-		if (abort.signal.aborted || authResult.status !== "success") {
-			splash.dismiss();
-			return false;
-		}
-
-		await this.prepareForModelSelectionAfterLogin(authResult, abort.signal);
-		if (abort.signal.aborted) {
-			return false;
-		}
-		await this.askOnboardingProviders(abort.signal);
-		if (abort.signal.aborted) {
-			return false;
-		}
-		await this.askOnboardingTraceOptIn();
-		if (abort.signal.aborted) {
+		if (!splash || abort.signal.aborted) {
 			return false;
 		}
 		splash.dismiss();
-		return true;
-	}
-
-	/**
-	 * Optional step: connect more providers before the first chat. The picker
-	 * stays mounted between logins so several can be connected in one pass.
-	 */
-	private async askOnboardingProviders(signal: AbortSignal): Promise<void> {
-		if (!this.onboardingSplash) {
-			return;
-		}
-		const authFlows = this.createAuthFlows();
-		for (;;) {
-			// A reset that cancels a provider login must end the question too,
-			// otherwise the next picker opens in the editor and waits for input.
-			// The signal is passed in: tearing the block down clears the field.
-			if (signal.aborted) {
-				return;
-			}
-			// One row per provider: a provider offering both a subscription and an
-			// API key would otherwise appear twice under the same name.
-			const options = [
-				...new Map(
-					authFlows
-						.getLoginProviderOptions()
-						.filter((option) => option.id !== PRIME_INFERENCE_PROVIDER_ID && option.category !== "service")
-						.map((option) => [option.id, option]),
-				).values(),
-			];
-			if (options.length === 0) {
-				return;
-			}
-			const items = options.map((option) => ({
-				id: option.id,
-				label: option.name,
-				...(this.modelRegistry.getProviderAuthStatus(option.id).configured ? { connected: true } : {}),
-			}));
-			const picked = await new Promise<string | undefined>((resolve) => {
-				let settled = false;
-				let close: (() => void) | undefined;
-				const settle = (id: string | undefined) => {
-					if (settled) {
-						return;
-					}
-					settled = true;
-					close?.();
-					resolve(id);
-				};
-				const picker = new OnboardingPickerComponent(
-					items,
-					(id) => settle(id),
-					() => settle(undefined),
-					() => settle(undefined),
-					{
-						prompt: "Connect other providers, or continue.",
-						searchPlaceholder: "Search providers",
-						note: "You can add providers anytime with /login.",
-						onExit: () => void this.shutdown(),
-						requestRender: () => this.ui.requestRender(),
-					},
-				);
-				close = this.showInlineAuthPanel(picker, { onReset: () => settle(undefined) });
-				this.ui.requestRender();
-			});
-			if (!picked) {
-				return;
-			}
-			const option = options.find((candidate) => candidate.id === picked);
-			if (option) {
-				await authFlows.loginProvider(option);
-			}
-		}
-	}
-
-	/** Final onboarding question: trace collection, with a reminder it is reversible. */
-	private askOnboardingTraceOptIn(): Promise<void> {
-		const splash = this.onboardingSplash;
-		if (!splash) {
-			return Promise.resolve();
-		}
-		return new Promise<void>((resolve) => {
-			let closed = false;
-			let close: (() => void) | undefined;
-			const finish = (enabled?: boolean) => {
-				if (closed) {
-					return;
-				}
-				closed = true;
-				if (enabled !== undefined) {
-					this.settingsManager.setAgentTracesEnabled(enabled);
-					void this.settingsManager.flush();
-				}
-				close?.();
-				resolve();
-			};
-			const choice = new OnboardingChoiceComponent(
-				[{ label: "Share" }, { label: "Not now" }],
-				(index) => finish(index === 0),
-				() => finish(undefined),
-				{
-					onExit: () => void this.shutdown(),
-					prompt: "Share agent traces with Prime Intellect?",
-					description:
-						"Trace sharing helps us train better open-source models and improve the open agent ecosystem for everyone.",
-					note: "You can change this anytime with /traces.",
-					requestRender: () => this.ui.requestRender(),
-				},
-			);
-			close = this.showInlineAuthPanel(choice, { onReset: () => finish(undefined) });
-			this.ui.requestRender();
-		});
+		await this.showConfigurationMenu("providers");
+		return !abort.signal.aborted && isOnboardingModelReady(this.getOnboardingState());
 	}
 
 	private getMarkdownThemeWithSettings(): MarkdownTheme {
@@ -9824,7 +9673,7 @@ export class InteractiveMode {
 					verb === "removed"
 						? `Removed MCP server "${name}" (${transport}). It is no longer available through mcp.`
 						: usesOAuth
-							? `${verb === "replaced" ? "Replaced" : "Added"} MCP server "${name}" (${transport}). ${hasMcpProviderRefresh ? "Run" : "Restart Prime Agent, then run"} /mcp login ${name} to connect.`
+							? `${verb === "replaced" ? "Replaced" : "Added"} MCP server "${name}" (${transport}). ${hasMcpProviderRefresh ? "Run" : "Restart Cyan, then run"} /mcp login ${name} to connect.`
 							: `${verb === "replaced" ? "Replaced" : "Added"} MCP server "${name}" (${transport}). Available next turn through mcp.`;
 				await this.reloadAfterMcpChange(usesOAuth ? successMessage : result.message, successMessage);
 			} else if (result.action === "list") {
@@ -11202,6 +11051,10 @@ export class InteractiveMode {
 
 		const updateArgs = parseCommandArgs(args);
 		const includesSelf = updateArgsIncludeSelf(updateArgs);
+		if (includesSelf && APP_NAME === "cyan") {
+			this.showError(getUpdateInstruction(APP_NAME));
+			return;
+		}
 		const updateCwd = this.getCurrentCwd();
 		const daemonSocketPath = resolveInteractiveUpdateDaemonSocketPath(
 			updateArgs,

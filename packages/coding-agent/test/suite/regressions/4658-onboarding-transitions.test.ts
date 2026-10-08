@@ -9,24 +9,6 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 import { initTheme } from "../../../src/modes/interactive/theme/theme.js";
 import { createHarness, type Harness } from "../harness.js";
 
-interface OnboardingSplashHandle {
-	dismiss(): void;
-}
-
-interface InteractiveOnboardingHarness {
-	runOnboardingFlow(showPrimeCliSplash?: boolean): Promise<void>;
-	uiServices: {
-		modelRegistry: ModelRegistry;
-	};
-	getModelCandidates(): Promise<AgentConnectionModel[]>;
-	showOnboardingSplash(continueActionLabel?: string): Promise<OnboardingSplashHandle | undefined>;
-	createAuthFlows(): {
-		runPrimeInferenceLogin(): Promise<AuthenticationResult>;
-	};
-	prepareForModelSelectionAfterLogin(authResult: AuthenticationResult): Promise<boolean>;
-	showConfigurationMenu(tab: "providers" | "models" | "mcp-connections"): Promise<void>;
-}
-
 interface ConfigurationHarness {
 	showConfigurationMenu(tab: "providers" | "models" | "mcp-connections"): Promise<void>;
 	editor: Input;
@@ -69,50 +51,6 @@ describe("ENG-4658 onboarding transitions", () => {
 		for (const harness of harnesses.splice(0)) {
 			harness.cleanup();
 		}
-	});
-
-	test("finishes first-launch onboarding after login without the model picker", async () => {
-		const harness = await createHarness({ provider: "prime-inference", withConfiguredAuth: false });
-		harnesses.push(harness);
-		const order: string[] = [];
-		const splash: OnboardingSplashHandle = {
-			dismiss: () => order.push("dismiss"),
-		};
-		const fakeThis = Object.create(InteractiveMode.prototype) as InteractiveOnboardingHarness;
-		fakeThis.uiServices = { modelRegistry: harness.session.modelRegistry };
-		fakeThis.getModelCandidates = vi.fn(async () => []);
-		fakeThis.showOnboardingSplash = vi.fn(async () => splash);
-		fakeThis.createAuthFlows = vi.fn(() => ({
-			runPrimeInferenceLogin: async (): Promise<AuthenticationResult> => {
-				order.push("login");
-				return {
-					status: "success",
-					providerId: "prime-inference",
-					providerName: "Prime Inference",
-					authType: "api_key",
-					kind: "provider",
-				};
-			},
-		}));
-		fakeThis.prepareForModelSelectionAfterLogin = vi.fn(async () => {
-			order.push("prepare");
-			return true;
-		});
-		fakeThis.showConfigurationMenu = vi.fn((tab) => {
-			order.push(`configuration:${tab}`);
-			return Promise.resolve();
-		});
-
-		await fakeThis.runOnboardingFlow(false);
-
-		// The login and the questions after it mount inside the onboarding block,
-		// so the flows are the inline ones rather than overlays.
-		expect(fakeThis.createAuthFlows).toHaveBeenCalledWith();
-		expect(fakeThis.showOnboardingSplash).toHaveBeenCalledWith();
-		// Onboarding now ends at the trace question; the model picker is no longer
-		// part of the first-launch sequence.
-		expect(fakeThis.showConfigurationMenu).not.toHaveBeenCalled();
-		expect(order).toEqual(["login", "prepare", "dismiss"]);
 	});
 
 	test("swaps the inline picker for the login panel and restores the draft after closing", async () => {

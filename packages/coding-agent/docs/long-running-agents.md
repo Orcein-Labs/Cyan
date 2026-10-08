@@ -1,6 +1,8 @@
 # Long-Running and Background Agents
 
-Prime Agent combines daemon-backed session workers with persistent state, scheduled prompts, direct agent messaging, goals, and bounded autonomous continuations. These features serve different purposes but share the same session and worker runtime.
+Cyan combines daemon-backed session workers with persistent state, scheduled prompts, direct agent messaging, goals, and bounded autonomous continuations. These features serve different purposes but share the same session and worker runtime.
+
+Cyan uses Julia Palette by default. The Python skill examples below require the explicitly selected IPython alternate (`CYAN_SUBSTRATE=ipython cyan`); for Palette setup and its host API, see the repository [README](../../../README.md).
 
 ## Runtime Flow
 
@@ -18,7 +20,7 @@ flowchart TD
         policy["Continuation policy"]
         queue["Session prompt queue"]
         session["AgentSession"]
-        kernel["Persistent Python kernel"]
+        kernel["Persistent kernel (Julia Palette by default)"]
         children["RLM child sessions"]
 
         heartbeat --> queue
@@ -44,24 +46,24 @@ The client can detach at any point. The resident worker continues to own the que
 
 ## Daemon-Backed Sessions
 
-Normal interactive sessions run in resident worker processes managed by a local supervisor. The worker owns the root session, its Python kernel, scheduled jobs, and RLM descendants.
+Normal interactive sessions run in resident worker processes managed by a local supervisor. The worker owns the root session, its selected kernel, scheduled jobs, and RLM descendants.
 
 Closing the terminal UI detaches the client; it does not stop the worker. List and reconnect to active agents with:
 
 ```bash
-prime-agent list
-prime-agent attach <agent>
+cyan list
+cyan attach <agent>
 ```
 
 Other lifecycle commands are:
 
 ```bash
-prime-agent agents                  # Open the agents view
-prime-agent rename <agent> <name>   # Give an agent a stable readable name
-prime-agent stop <agent>            # Stop one agent
-prime-agent status                  # Inspect background services
-prime-agent doctor [--fix]          # Diagnose or repair service state
-prime-agent shutdown [--force]      # Stop all agents and services
+cyan agents                  # Open the agents view
+cyan rename <agent> <name>   # Give an agent a stable readable name
+cyan stop <agent>            # Stop one agent
+cyan status                  # Inspect background services
+cyan doctor [--fix]          # Diagnose or repair service state
+cyan shutdown [--force]      # Stop the selected daemon and its agents
 ```
 
 Workers persist transcripts as JSONL and store feature-specific state under the session artifact directory. A worker or supervisor restart can recover session state and schedules and rehydrate retained completed RLM children without treating a terminal client as the owner of the work.
@@ -73,7 +75,7 @@ Daemon workers are process-isolated for lifecycle and failure containment, not s
 The daemon routes direct messages between active sessions and retained daemon-backed subagents. From a shell:
 
 ```bash
-prime-agent send <agent> "Please verify the latest migration"
+cyan send <agent> "Please verify the latest migration"
 ```
 
 From the Python kernel, use the preloaded `agent_observe` and `agent_message` Python skills:
@@ -111,13 +113,13 @@ A receipt is `delivered` when it reached an idle target's context or `queued` wh
 
 ## Heartbeats and Scheduled Prompts
 
-Prime Agent has three related scheduling surfaces:
+Cyan has three related scheduling surfaces:
 
 | Surface | Owner | Purpose |
 |---|---|---|
 | `/heartbeat` | User | One visible recurring instruction for the current session. |
 | `rlm_heartbeat` | Agent | Multiple programmatically managed recurring instructions internal to the current session. |
-| `prime-agent schedule` | User or automation | General one-time or cron prompts targeted at an agent. |
+| `cyan schedule` | User or automation | General one-time or cron prompts targeted at an agent. |
 
 ### User heartbeat
 
@@ -161,10 +163,10 @@ RLM heartbeats are distinct from the user's `/heartbeat`; the Python skill canno
 Schedule a one-time or recurring prompt for an addressable agent:
 
 ```bash
-prime-agent schedule add worker "in 30m" -- "Check the benchmark result"
-prime-agent schedule add worker "0 9 * * 1-5" -- "Review open work"
-prime-agent schedule list --all
-prime-agent schedule cancel <job-id>
+cyan schedule add worker "in 30m" -- "Check the benchmark result"
+cyan schedule add worker "0 9 * * 1-5" -- "Review open work"
+cyan schedule list --all
+cyan schedule cancel <job-id>
 ```
 
 Scheduled jobs are persisted per session and continue while the UI is detached. Due ticks are claimed before delivery so a crash does not replay an uncertain prompt, and missed ticks are coalesced rather than accumulated into an unbounded backlog.
@@ -198,7 +200,7 @@ Goal state records token usage, elapsed time, continuation count, and an optiona
 
 ## Autonomous Mode
 
-Autonomous mode is a bounded host policy for runs where no human input is expected. Prime Agent adds follow-up continuations until configured quality gates pass or a continuation, turn, token, or wall-clock limit is reached.
+Autonomous mode is a bounded host policy for runs where no human input is expected. Cyan adds follow-up continuations until configured quality gates pass or a continuation, turn, token, or wall-clock limit is reached.
 
 Enable it in an interactive session. `/autonomous on` accepts the same budget
 options as the CLI, so an interactive run can define its own budget instead of
@@ -214,7 +216,7 @@ stopping at the default three continuations:
 Or configure a run from the CLI:
 
 ```bash
-prime-agent \
+cyan \
   --autonomous \
   --autonomous-gate "npm run check" \
   --autonomous-max-turns 20 \
@@ -252,7 +254,7 @@ the run. A background `bash()` handle that never exits holds the pause
 indefinitely by design — the handle settling, not a timer, is the wake-up —
 and a user prompt always wakes the session immediately.
 
-Autonomous mode supports limits for continuations, assistant turns, tokens, and wall-clock duration. Gate commands run before the session may finish; a failed gate returns its bounded output to the agent for another attempt. Prime Agent avoids rerunning the same failed gate when the workspace has not changed.
+Autonomous mode supports limits for continuations, assistant turns, tokens, and wall-clock duration. Gate commands run before the session may finish; a failed gate returns its bounded output to the agent for another attempt. Cyan avoids rerunning the same failed gate when the workspace has not changed.
 
 Goals and autonomous mode are complementary but different:
 
@@ -261,7 +263,7 @@ Goals and autonomous mode are complementary but different:
 
 ## Compaction and Continuity
 
-Automatic compaction handles context growth during long tasks. On overflow or near the configured threshold, Prime Agent summarizes older messages, retains recent context, and continues. The Python kernel persists through compaction, so variables, imports, helper functions, and task state remain available.
+Automatic compaction handles context growth during long tasks. On overflow or near the configured threshold, Cyan summarizes older messages, retains recent context, and continues. The Python kernel persists through compaction, so variables, imports, helper functions, and task state remain available.
 
 The agent can inspect or request compaction programmatically:
 

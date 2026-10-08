@@ -115,7 +115,7 @@ describe("NIRA Stage 0: substrate modes (via createAgentSession)", () => {
 				initialActiveToolNames: ["neurabash"],
 				initialGoal: { objective: "test objective" },
 			}),
-		).rejects.toThrow(/active goal requires the ipython tool/i);
+		).rejects.toThrow(/active goal requires an available goal-control runtime \(IPython or Palette\)/i);
 	});
 
 	it("IPython breakout: a NEURA session cannot execute an ipython tool call even if the model attempts one", async () => {

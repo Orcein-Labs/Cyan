@@ -2,13 +2,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	ENV_AGENT_DIR,
-	PACKAGE_NAME,
-	SELF_UPDATE_INTERACTIVE_CHILD_ENV,
-	SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE,
-	VERSION,
-} from "../src/config.js";
+import { ENV_AGENT_DIR, SELF_UPDATE_INTERACTIVE_CHILD_ENV } from "../src/config.js";
 import { main } from "../src/main.js";
 import { handlePackageCommand } from "../src/package-manager-cli.js";
 
@@ -42,11 +36,6 @@ describe("package commands", () => {
 	let originalTmpDir: string | undefined;
 	let originalExitCode: typeof process.exitCode;
 	let originalExecPath: string;
-
-	function getNewerPatchVersion(): string {
-		const [major = "0", minor = "0", patch = "0"] = VERSION.split(".");
-		return `${major}.${minor}.${Number.parseInt(patch, 10) + 1}`;
-	}
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `pi-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -110,80 +99,11 @@ describe("package commands", () => {
 		expect(removedSettings.packages ?? []).toHaveLength(0);
 	});
 
-	it("rejects combining --nightly and --stable", async () => {
+	it("rejects --nightly for extension-only updates", async () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(main(["update", "--nightly", "--stable"])).resolves.toBeUndefined();
-
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain("--nightly and --stable cannot be combined");
-			expect(process.exitCode).toBe(1);
-		} finally {
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("refuses to switch to the nightly channel without a TTY or --force and changes nothing", async () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-		try {
-			await expect(main(["update", "--nightly"])).resolves.toBeUndefined();
-
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain("Switching to the nightly channel needs confirmation");
-			expect(process.exitCode).toBe(1);
-			const settingsPath = join(agentDir, "settings.json");
-			if (existsSync(settingsPath)) {
-				expect(JSON.parse(readFileSync(settingsPath, "utf8")).updateChannel).toBeUndefined();
-			}
-		} finally {
-			errorSpy.mockRestore();
-			logSpy.mockRestore();
-		}
-	});
-
-	it("keeps a successful extension update when the nightly manifest is missing for an all target", async () => {
-		process.env.PRIME_AGENT_DOWNLOAD_BASE_URL = "https://downloads.example.test/prime-agent";
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => new Response("", { status: 404 })),
-		);
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(handlePackageCommand(["update", "--nightly", "--force"])).resolves.toBe(true);
-
-			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stdout).toContain("Updated packages");
-			expect(stderr).toContain("Could not resolve a nightly release");
-			expect(stderr).toContain("was not updated and the update channel was not changed");
-			expect(process.exitCode).toBeUndefined();
-			const settingsPath = join(agentDir, "settings.json");
-			if (existsSync(settingsPath)) {
-				expect(JSON.parse(readFileSync(settingsPath, "utf-8")).updateChannel).toBeUndefined();
-			}
-		} finally {
-			logSpy.mockRestore();
-			errorSpy.mockRestore();
-		}
-	});
-
-	it("rejects --nightly for extension-only updates instead of silently ignoring it", async () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		try {
-			await expect(handlePackageCommand(["update", "--extensions", "--nightly"])).resolves.toBe(true);
-
-			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain("--nightly and --stable only apply to Prime Agent itself");
-			expect(process.exitCode).toBe(1);
-		} finally {
-			errorSpy.mockRestore();
-		}
+		await handlePackageCommand(["update", "--extensions", "--nightly"]);
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("only apply to cyan itself"));
+		expect(process.exitCode).toBe(1);
 	});
 
 	interface SelfUpdateFixtureOptions {
@@ -264,131 +184,24 @@ ${options.failInstall ? 'if(args.includes("install")) process.exit(23);' : ""}
 		};
 	}
 
-	it("uses global npmCommand and the release manifest install spec for forced self updates", async () => {
-		const tarballUrl = "https://downloads.example.test/prime-agent/prime-agent-current.tgz";
-		const fixture = setupSelfUpdate({
-			manifest: { tarball: tarballUrl, version: VERSION },
-			projectNpmCommand: true,
-		});
-
-		await expect(runSelfUpdateInstallChild(["update", "--self", "--force"])).resolves.toBeUndefined();
-
-		expect(process.exitCode).toBeUndefined();
-		expect(fixture.errorSpy).not.toHaveBeenCalled();
-		expect(fixture.fetchMock).toHaveBeenCalledOnce();
-		const recordedArgs = fixture.npmCalls().flat();
-		expect(recordedArgs).toContain(fixture.globalPrefix);
-		expect(recordedArgs).toContain(tarballUrl);
-		expect(recordedArgs).not.toContain(fixture.projectPrefix);
-	});
-
-	it("uses the current package name when the update check omits packageName", async () => {
-		const fixture = setupSelfUpdate({ scope: "@mariozechner", manifest: { version: getNewerPatchVersion() } });
-
-		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
-
-		expect(process.exitCode).toBeUndefined();
-		expect(fixture.errorSpy).not.toHaveBeenCalled();
-		expect(fixture.fetchMock).toHaveBeenCalledOnce();
-		expect(fixture.npmCalls().flat()).toContain(PACKAGE_NAME);
-	});
-
-	it("installs the active package name from the update check during self-update", async () => {
-		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
-		const fixture = setupSelfUpdate({
-			scope: "@mariozechner",
-			manifest: { packageName: activePackageName, version: "0.73.0" },
-		});
-
-		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
-
-		expect(process.exitCode).toBeUndefined();
-		expect(fixture.errorSpy).not.toHaveBeenCalled();
-		expect(fixture.npmCalls()).toEqual([
-			expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
-			expect.arrayContaining(["install", "-g", activePackageName]),
-		]);
-	});
-
-	it("installs the Prime Agent tarball from the update manifest during self-update", async () => {
-		const baseUrl = "https://downloads.example.test/prime-agent";
-		const tarballPath = "releases/v0.73.0/prime-agent-0.73.0.tgz";
-		const fixture = setupSelfUpdate({
-			manifest: { package: "prime-agent", tarball: tarballPath, version: "0.73.0" },
-			downloadBaseUrl: baseUrl,
-		});
-
-		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
-
-		expect(process.exitCode).toBeUndefined();
-		expect(fixture.errorSpy).not.toHaveBeenCalled();
-		expect(fixture.npmCalls()).toEqual([
-			expect.arrayContaining(["install", "-g", `${baseUrl}/${tarballPath}`]),
-			expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
-		]);
-	});
-
-	it("treats a channel that is behind the installed version as nothing to update", async () => {
-		const fixture = setupSelfUpdate({
-			manifest: { package: "prime-agent", tarball: "releases/v0.0.1/prime-agent-0.0.1.tgz", version: "0.0.1" },
-			downloadBaseUrl: "https://downloads.example.test/prime-agent",
-		});
-
-		await expect(runSelfUpdateInstallChild(["update", "--self"])).resolves.toBeUndefined();
-
-		expect(fixture.stdout()).toContain("is ahead of the stable channel");
-		expect(process.exitCode).toBe(SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE);
+	it.each([
+		[["update"]],
+		[["update", "--self", "--force"]],
+		[["update", "--rollback"]],
+		[["update", "--nightly", "--force"]],
+		[["update", "--internal-update-restart-coordinator"]],
+	])("refuses upstream self-update %j without fetching or installing", async (args: string[]) => {
+		const fixture = setupSelfUpdate({ manifest: { version: "99.0.0", package: "prime-agent" } });
+		await handlePackageCommand(args);
+		expect(fixture.stderr()).toContain("upstream binary updates are disabled");
+		expect(fixture.fetchMock).not.toHaveBeenCalled();
 		expect(fixture.ranNpm()).toBe(false);
-	});
-
-	it("refuses a downgrade even with --nightly --force and leaves the channel unchanged", async () => {
-		const fixture = setupSelfUpdate({
-			manifest: {
-				package: "prime-agent",
-				tarball: "releases/v0.0.1-beta.1.1.abcdef0/prime-agent-0.0.1-beta.1.1.abcdef0.tgz",
-				version: "0.0.1-beta.1.1.abcdef0",
-			},
-			downloadBaseUrl: "https://downloads.example.test/prime-agent",
-		});
-
-		await expect(runSelfUpdateInstallChild(["update", "--self", "--nightly", "--force"])).resolves.toBeUndefined();
-
-		expect(fixture.stderr()).toContain("that is a downgrade");
-		expect(fixture.ranNpm()).toBe(false);
-		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).updateChannel).toBeUndefined();
-	});
-
-	it("does not self-update when the same-version manifest uses the Prime Agent package alias", async () => {
-		const fixture = setupSelfUpdate({
-			manifest: { package: "prime-agent", tarball: "releases/current/prime-agent.tgz", version: VERSION },
-			downloadBaseUrl: "https://downloads.example.test/prime-agent",
-		});
-
-		await expect(main(["update"])).resolves.toBeUndefined();
-
-		expect(process.exitCode).toBeUndefined();
-		expect(fixture.errorSpy).not.toHaveBeenCalled();
-		expect(fixture.stdout()).toContain("is already up to date");
-		expect(fixture.ranNpm()).toBe(false);
-	});
-
-	it("fails self-update when renamed npm package installation fails", async () => {
-		const activePackageName = PACKAGE_NAME === "@new-scope/pi" ? "@newer-scope/pi" : "@new-scope/pi";
-		const fixture = setupSelfUpdate({
-			scope: "@mariozechner",
-			manifest: { packageName: activePackageName, version: "0.73.0" },
-			failInstall: true,
-		});
-
-		await expect(main(["update"])).resolves.toBeUndefined();
-
 		expect(process.exitCode).toBe(1);
-		expect(fixture.stdout()).not.toContain("Updated pi");
-		expect(fixture.stderr()).toContain("exited with code 23");
-		expect(fixture.npmCalls()).toEqual([
-			expect.arrayContaining(["uninstall", "-g", PACKAGE_NAME]),
-			expect.arrayContaining(["install", "-g", activePackageName]),
-		]);
+		process.exitCode = undefined;
+		await runSelfUpdateInstallChild(args);
+		expect(process.exitCode).toBe(1);
+		expect(fixture.fetchMock).not.toHaveBeenCalled();
+		expect(fixture.ranNpm()).toBe(false);
 	});
 
 	it("suggests the configured source when update input omits the npm prefix", async () => {

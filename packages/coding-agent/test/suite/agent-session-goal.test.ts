@@ -226,6 +226,43 @@ describe("AgentSession goals", () => {
 		});
 	});
 
+	it("uses Palette as the goal control runtime when IPython is unavailable", async () => {
+		const paletteFactory: NonNullable<HarnessOptions["baseToolsFactory"]> = (_sessionId, host) => ({
+			tools: {
+				palette: {
+					name: "palette",
+					label: "Palette",
+					description: "Execute Julia in the Palette session.",
+					parameters: Type.Object({ code: Type.String() }),
+					execute: async () => {
+						const completeGoal = host?.hostHandlers()["goal.complete"];
+						if (!completeGoal) throw new Error("goal.complete host handler is not available");
+						const result = await completeGoal({});
+						return { content: [{ type: "text", text: JSON.stringify(result) }], details: {} };
+					},
+				},
+			},
+		});
+		const harness = await createHarness({
+			baseToolsFactory: paletteFactory,
+			initialGoal: { objective: "finish the task" },
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("I made progress."),
+			fauxAssistantMessage(fauxToolCall("palette", { code: 'Palette.host_request("goal.complete")' }), {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("Goal complete."),
+		]);
+
+		await harness.session.prompt("continue the goal");
+
+		expect(harness.session.getActiveToolNames()).toEqual(["palette"]);
+		expect(harness.session.goalState).toMatchObject({ active: false, status: "complete" });
+		expect(getMessageText(goalContextMessages(harness)[0])).not.toContain("Python REPL");
+	});
+
 	it.each([
 		{
 			name: "goal.create without an objective",

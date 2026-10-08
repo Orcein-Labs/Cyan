@@ -485,7 +485,7 @@ export class ProviderAuthFlows {
 						resolve(undefined);
 					},
 					{
-						prompt: "Which account should Prime Agent use?",
+						prompt: "Which account should Cyan use?",
 						selectedIndex: current >= 0 ? current + 1 : 0,
 						requestRender: () => this.host.ui.requestRender(),
 						onExit: () => this.host.exitApp?.(),

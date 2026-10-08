@@ -142,104 +142,19 @@ describe("tryExecUpdateRelaunch", () => {
 	);
 });
 
-describe("interactive self-update relaunch", () => {
-	it.skipIf(process.platform === "win32").each([false, true])(
-		"tears down and relaunches the TUI with the activated application (compiled: %s)",
-		async (binary) => {
-			updateMocks.binary = binary;
-			const events: string[] = [];
-			updateMocks.spawnSync.mockReset();
-			updateMocks.spawnSync.mockImplementation(() => {
-				events.push("update");
-				return { status: 0, signal: null } as never;
-			});
-			updateMocks.launchCoordinator.mockReset();
-			updateMocks.launchCoordinator.mockImplementation(async () => {
-				events.push("coordinator");
-				return {
-					version: 1,
-					requestId: "test-request",
-					socketPath: "/tmp/update.sock",
-					phase: "complete",
-					coordinator: { pid: process.pid },
-					counts: { total: 0, restored: 0, resumed: 0, failed: 0 },
-					failures: [],
-					startedAt: "2026-08-21T00:00:00.000Z",
-					updatedAt: "2026-08-21T00:00:01.000Z",
-				};
-			});
-
-			const updateProcess = process as NodeJS.Process & {
-				execve?: (file: string, args: string[], environment: NodeJS.ProcessEnv) => never;
-			};
-			const originalExecve = updateProcess.execve;
-			const originalNodeVersion = Object.getOwnPropertyDescriptor(process.versions, "node");
-			const execve = vi.fn((_file: string, _args: string[], _environment: NodeJS.ProcessEnv) => {
-				events.push("execve");
-				return undefined as never;
-			});
-			updateProcess.execve = execve;
-			Object.defineProperty(process.versions, "node", { ...originalNodeVersion, value: "26.1.0" });
-
-			const receiver = {
-				connectionState: {
-					activeSessionId: "active-session",
-					sessionFile: "/tmp/session.jsonl",
-				},
-				fullscreenEnabled: false,
-				options: {
-					daemonSocketPath: "/tmp/update.sock",
-					onShutdown: async () => events.push("shutdown"),
-				},
-				getCurrentCwd: () => process.cwd(),
-				stopWorkingLoader: () => events.push("loader-stop"),
-				stop: () => events.push("mode-stop"),
-				ui: {
-					terminal: { drainInput: async () => events.push("drain-input") },
-					stop: () => events.push("ui-stop"),
-				},
-				agentConnection: {
-					dispose: async () => events.push("connection-dispose"),
-				},
-			};
-			const handleUpdateCommand = (
-				InteractiveMode.prototype as unknown as {
-					handleUpdateCommand(this: typeof receiver, args: string): Promise<void>;
-				}
-			).handleUpdateCommand;
-
-			try {
-				await handleUpdateCommand.call(receiver, "");
-			} finally {
-				updateMocks.binary = false;
-				updateProcess.execve = originalExecve;
-				if (originalNodeVersion) {
-					Object.defineProperty(process.versions, "node", originalNodeVersion);
-				}
+describe("Cyan interactive self-update", () => {
+	it("refuses upstream replacement before stopping the active session", async () => {
+		updateMocks.spawnSync.mockReset();
+		const receiver = { showError: vi.fn() };
+		const handleUpdateCommand = (
+			InteractiveMode.prototype as unknown as {
+				handleUpdateCommand(this: typeof receiver, args: string): Promise<void>;
 			}
-
-			expect(events).toEqual([
-				"loader-stop",
-				"drain-input",
-				"ui-stop",
-				"update",
-				"mode-stop",
-				"connection-dispose",
-				"shutdown",
-				"coordinator",
-				"execve",
-			]);
-			expect(updateMocks.spawnSync).toHaveBeenCalledTimes(1);
-			const updateArgs = updateMocks.spawnSync.mock.calls[0]?.[1];
-			expect(updateArgs).toEqual(
-				binary
-					? ["update", "--daemon-socket", "/tmp/update.sock"]
-					: [...process.execArgv, process.argv[1], "update", "--daemon-socket", "/tmp/update.sock"],
-			);
-			expect(execve.mock.calls[0]?.[0]).toBe(binary ? "/tmp/managed/bin/prime-agent" : process.execPath);
-			expect(execve.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(["--resume", "/tmp/session.jsonl"]));
-		},
-	);
+		).handleUpdateCommand;
+		await handleUpdateCommand.call(receiver, "");
+		expect(receiver.showError).toHaveBeenCalledWith(expect.stringContaining("source checkout"));
+		expect(updateMocks.spawnSync).not.toHaveBeenCalled();
+	});
 });
 
 describe("formatDaemonReconnectBanner", () => {
@@ -282,7 +197,7 @@ describe("buildDaemonUpdateRestartReport", () => {
 		expect(report.info).toEqual(["Restored 2 daemon sessions", "Resumed 1 interrupted session"]);
 		expect(report.warnings).toEqual([
 			"Updated, but could not restart the daemon (could not stop predecessor).",
-			"The daemon still runs the previous version; run `prime-agent shutdown`, then run `prime-agent` to restart and apply the update.",
+			expect.stringContaining("--daemon-socket /tmp/custom-daemon.sock shutdown"),
 			"1 daemon session could not be restored.",
 			"Could not restore /tmp/failed.jsonl: create failed",
 		]);

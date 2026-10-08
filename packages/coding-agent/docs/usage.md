@@ -1,8 +1,10 @@
-# Using Prime Agent
+# Using Cyan
 
 This page collects day-to-day usage details that do not fit on the quickstart page.
 
-Prime Agent is built around one model-facing tool: a persistent Python REPL kernel. The kernel retains Python state across turns and acts as a control environment for file operations, project commands, installed Python skills, MCP-backed skills, and recursive subagents. The TypeScript host remains responsible for provider calls, session state, tool execution, scheduling, and child-agent lifecycles.
+Cyan launches with the persistent Julia Palette substrate by default. Configure its SDK and host using the repository [setup instructions](../../../README.md). Each parent and child owns an independent kernel, with durable state retained under Cyan's configuration directory. The TypeScript host owns provider calls, session state, scheduling, and child lifecycles.
+
+The optional IPython substrate remains available through `CYAN_SUBSTRATE=ipython cyan`. Python examples on this page apply to that alternate substrate. They do not describe Palette's Julia API. Cyan is a fork of Prime Agent and retains its upstream licenses and attribution.
 
 ## Interactive Mode
 
@@ -61,13 +63,15 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
-| `/quit` | Quit Prime Agent |
+| `/quit` | Quit Cyan |
 
 ### Prime credentials and trace sharing
 
-Prime Inference uses Agent-owned credentials in `~/.prime/agent/auth.json`, with `--api-key` and `PRIME_API_KEY` taking priority. Normal use ignores Prime CLI credentials, URLs, and teams in `~/.prime/config.json`. Run `/login` once if you previously relied on CLI credentials. Explicit login can import a production-compatible CLI key and its file team snapshot after production validation. Agent login, team changes, and logout never modify CLI config.
+Prime Inference uses Agent-owned credentials in `~/.cyan/agent/auth.json`, with `--api-key` and `PRIME_API_KEY` taking priority. Normal use ignores Prime CLI credentials, URLs, and teams in `~/.prime/config.json`. Run `/login` once if you previously relied on CLI credentials. Explicit login can import a production-compatible CLI key and its file team snapshot after production validation. Agent login, team changes, and logout never modify CLI config.
 
 Trace uploads also ignore live CLI credentials. Use `/traces login` to save a trace credential, or set `PRIME_AGENT_TRACES_API_KEY`. Explicit trace login can reuse a CLI key only after production URL and scope validation. Trace sharing is opt-in; `/traces off` disables automatic sharing. See [Providers](providers.md#prime-inference) for credential precedence, team overrides, and production endpoint details.
+
+Analytics also default to off. Explicit `telemetry.enabled=true` in global settings or `CYAN_TELEMETRY=1` enables pseudonymous analytics; the default recipient is Prime Intellect. Set `CYAN_TELEMETRY_ENDPOINT` for another analytics endpoint. This setting is separate from opt-in trace uploads.
 
 ## Message Queue
 
@@ -81,19 +85,19 @@ You can submit messages while the agent is still working:
 - While browsing, **Enter** applies the edit as steering input and **Alt+Enter** applies it as a follow-up; submitting an empty edit deletes the item.
 - **Ctrl+Option+Up / Ctrl+Option+Down** move the selected item earlier or later within its queue.
 
-On Windows Terminal, Alt+Enter is fullscreen by default. Remap it as described in [Terminal setup](terminal-setup.md) if you want Prime Agent to receive the shortcut.
+On Windows Terminal, Alt+Enter is fullscreen by default. Remap it as described in [Terminal setup](terminal-setup.md) if you want Cyan to receive the shortcut.
 
 Configure delivery in [Settings](settings.md) with `steeringMode` and `followUpMode`.
 
 ## Sessions
 
-Sessions are saved automatically as flat JSONL files under `~/.prime/agent/sessions/`. Each session header records its working directory, which the session picker uses for project-scoped views.
+Sessions are saved automatically as flat JSONL files under `~/.cyan/agent/sessions/`. Each session header records its working directory, which the session picker uses for project-scoped views.
 
 ```bash
-prime-agent -c                  # Continue most recent session
-prime-agent -r [path|id]        # Browse sessions or resume one directly
-prime-agent --no-session        # Ephemeral mode; do not save
-prime-agent --fork <path|id>    # Fork a session into a new session file
+cyan -c                  # Continue most recent session
+cyan -r [path|id]        # Browse sessions or resume one directly
+cyan --no-session        # Ephemeral mode; do not save
+cyan --fork <path|id>    # Fork a session into a new session file
 ```
 
 Useful session commands:
@@ -109,7 +113,7 @@ See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
 ## Agents and Recursive Subagents
 
-Normal interactive sessions are persistent agents backed by isolated worker processes. Closing the TUI detaches the client; use `prime-agent agents`, `prime-agent list`, or `prime-agent attach <agent>` to find and reattach to running work. `prime-agent stop <agent>` stops one root agent, while `prime-agent shutdown` stops all workers and the local supervisor.
+Normal interactive sessions are persistent agents backed by isolated worker processes. Closing the TUI detaches the client; use `cyan agents`, `cyan list`, or `cyan attach <agent>` to find and reattach to running work. `cyan stop <agent>` stops one root agent, while `cyan shutdown` stops the workers and supervisor owned by the selected daemon.
 
 Within a session, the model can delegate through the `rlm` object already available in the Python REPL:
 
@@ -140,9 +144,9 @@ Children inherit the parent model unless the user requests another model. They r
 
 ## Context Files
 
-Prime Agent loads `AGENTS.md` or `CLAUDE.md` at startup from:
+Cyan loads `AGENTS.md` or `CLAUDE.md` at startup from:
 
-- `~/.prime/agent/AGENTS.md` for global instructions
+- `~/.cyan/agent/AGENTS.md` for global instructions
 - parent directories, walking up from the current working directory
 - the current directory
 
@@ -152,8 +156,8 @@ Use context files for project conventions, commands, safety rules, and preferenc
 
 Replace the default system prompt with:
 
-- `.prime/agent/SYSTEM.md` for a project
-- `~/.prime/agent/SYSTEM.md` globally
+- `.cyan/agent/SYSTEM.md` for a project
+- `~/.cyan/agent/SYSTEM.md` globally
 
 Append to the default prompt without replacing it with `APPEND_SYSTEM.md` in either location.
 
@@ -166,33 +170,33 @@ Use `/share` to upload a private GitHub gist with a shareable HTML link.
 ## CLI Reference
 
 ```bash
-prime-agent [options] [@files...] [messages...]
+cyan [options] [@files...] [messages...]
 ```
 
 ### Shell Commands
 
 ```bash
-prime-agent agents
-prime-agent list [--all]
-prime-agent sessions [--all] [--json]
-prime-agent attach <agent>
-prime-agent stop <agent>
-prime-agent rename <agent> <name>
-prime-agent send <agent> <message>
-prime-agent schedule <list|add|cancel>
-prime-agent status
-prime-agent doctor [--fix]
-prime-agent shutdown [--force]
+cyan agents
+cyan list [--all]
+cyan sessions [--all] [--json]
+cyan attach <agent>
+cyan stop <agent>
+cyan rename <agent> <name>
+cyan send <agent> <message>
+cyan schedule <list|add|cancel>
+cyan status
+cyan doctor [--fix]
+cyan shutdown [--force]
 
-prime-agent package install <source> [--local]
-prime-agent package remove <source> [--local]
-prime-agent package list
-prime-agent package update [source]
-prime-agent update [--force]
-prime-agent config
+cyan package install <source> [--local]
+cyan package remove <source> [--local]
+cyan package list
+cyan package update [source]
+cyan update                      # Reports source-update instructions; binary updates unavailable
+cyan config
 ```
 
-See [Prime Agent Packages](packages.md) for package sources and security notes.
+See [Cyan Packages](packages.md) for package sources and security notes.
 
 ### Modes
 
@@ -203,10 +207,10 @@ See [Prime Agent Packages](packages.md) for package sources and security notes.
 | `--mode json` | Output all events as JSON lines; see [JSON mode](json.md) |
 | `--mode rpc` | RPC mode over stdin/stdout; see [RPC mode](rpc.md) |
 
-In print mode, Prime Agent also reads piped stdin and merges it into the initial prompt:
+In print mode, Cyan also reads piped stdin and merges it into the initial prompt:
 
 ```bash
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | cyan -p "Summarize this text"
 ```
 
 ### Model Options
@@ -219,7 +223,7 @@ cat README.md | prime-agent -p "Summarize this text"
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `--models <patterns>` | Comma-separated patterns for Alt+M cycling |
 
-Use `prime-agent model list [search]` to list available models.
+Use `cyan model list [search]` to list available models.
 
 ### Session Options
 
@@ -231,7 +235,7 @@ Use `prime-agent model list [search]` to list available models.
 | `--session-dir <dir>` | Custom session storage directory |
 | `--no-session` | Ephemeral mode; do not save |
 
-Use `prime-agent session export <file> [output]` to export a session to HTML.
+Use `cyan session export <file> [output]` to export a session to HTML.
 
 ### Tool Options
 
@@ -241,7 +245,7 @@ Use `prime-agent session export <file> [output]` to export a session to HTML.
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools |
 
-Built-in tools: `ipython`.
+Default model tool: `palette` (persistent Julia). The explicitly selected IPython alternate uses `ipython`.
 
 ### Resource Options
 
@@ -260,7 +264,7 @@ Built-in tools: `ipython`.
 Combine `--no-*` with explicit flags to load exactly what you need, ignoring settings. Example:
 
 ```bash
-prime-agent --no-extensions -e ./my-extension.ts
+cyan --no-extensions -e ./my-extension.ts
 ```
 
 ### Autonomous Options
@@ -282,12 +286,12 @@ Interactive sessions set the same budget from the `/autonomous` slash command: `
 
 All `<n>` values must be positive integers: zero, negative, fractional, and non-numeric values are rejected. Value-taking autonomous flags require a separate argument, not `--flag=value`. A missing value is rejected, and a following long option is not consumed as a value. Repeating a numeric flag uses its last value; repeating `--autonomous-gate` appends another gate.
 
-After each assistant response, configured gates run before the ordinary continuation limits are evaluated. All gates must pass for the run to finish. A failed gate supplies bounded command output to the next continuation so the agent can repair it; Prime Agent avoids rerunning an unchanged failed gate and advances its attempt count instead. A passing gate permits completion even if a continuation, turn, token, or time limit has otherwise been reached. If a gate does not pass, or if there are no gates, the host can inject another continuation only while all four limits remain below their configured values. Limits are checked in this order: continuations, turns, tokens, then elapsed time. Reaching one prevents another automatic continuation; it does not imply task success.
+After each assistant response, configured gates run before the ordinary continuation limits are evaluated. All gates must pass for the run to finish. A failed gate supplies bounded command output to the next continuation so the agent can repair it; Cyan avoids rerunning an unchanged failed gate and advances its attempt count instead. A passing gate permits completion even if a continuation, turn, token, or time limit has otherwise been reached. If a gate does not pass, or if there are no gates, the host can inject another continuation only while all four limits remain below their configured values. Limits are checked in this order: continuations, turns, tokens, then elapsed time. Reaching one prevents another automatic continuation; it does not imply task success.
 
 For example, this noninteractive run uses a locally available model configuration, skips startup network operations, and bounds every autonomous budget while requiring the project check to pass:
 
 ```bash
-prime-agent -p \
+cyan -p \
   --autonomous \
   --autonomous-gate "npm run check" \
   --autonomous-gate-retries 2 \
@@ -324,68 +328,68 @@ Goals are separate from autonomous mode: `--goal <objective>` starts a persisten
 Prefix files with `@` to include them in the message:
 
 ```bash
-prime-agent @prompt.md "Answer this"
-prime-agent -p @screenshot.png "What's in this image?"
-prime-agent @code.ts @test.ts "Review these files"
+cyan @prompt.md "Answer this"
+cyan -p @screenshot.png "What's in this image?"
+cyan @code.ts @test.ts "Review these files"
 ```
 
 ### Examples
 
 ```bash
 # Interactive with initial prompt
-prime-agent "List all .ts files in src/"
+cyan "List all .ts files in src/"
 
 # Non-interactive
-prime-agent -p "Summarize this codebase"
+cyan -p "Summarize this codebase"
 
 # Non-interactive with piped stdin
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | cyan -p "Summarize this text"
 
 # Different model
-prime-agent --provider openai --model gpt-4o "Help me refactor"
+cyan --provider openai --model gpt-4o "Help me refactor"
 
 # Model with provider prefix
-prime-agent --model openai/gpt-4o "Help me refactor"
+cyan --model openai/gpt-4o "Help me refactor"
 
 # Model with thinking level shorthand
-prime-agent --model sonnet:high "Solve this complex problem"
+cyan --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-prime-agent --models "claude-*,gpt-4o"
+cyan --models "claude-*,gpt-4o"
 
 # Restrict to the built-in Python REPL tool
-prime-agent --tools ipython -p "Review the code"
+cyan --tools ipython -p "Review the code"
 ```
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `PRIME_AGENT_CODING_AGENT_DIR` | Override config directory; default is `~/.prime/agent` |
-| `PRIME_AGENT_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
-| `PRIME_AGENT_CODING_AGENT_SESSION_DIR` | Legacy alias for `PRIME_AGENT_SESSION_DIR` |
+| `CYAN_AGENT_DIR` | Override config directory; default is `~/.cyan/agent` |
+| `CYAN_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
+| `CYAN_CODING_AGENT_SESSION_DIR` | Legacy alias for `CYAN_SESSION_DIR` |
 | `PI_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
 | `PI_OFFLINE` | Disable startup network operations, including update checks and package update checks |
-| `PI_SKIP_VERSION_CHECK` | Skip the Prime Agent version update check at startup. This prevents the release manifest request |
-| `PRIME_AGENT_DOWNLOAD_BASE_URL` | Override the Prime Agent release manifest and tarball base URL |
+| `PI_SKIP_VERSION_CHECK` | Upstream compatibility switch; Cyan source startup skips upstream version checks |
+| `CYAN_TELEMETRY` | Explicitly opt in (`1`) or out (`0`) of analytics; disabled by default |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
 | `PRIME_API_KEY` | Prime Inference API key; also used for trace sharing when it has `agent_traces` scope |
 | `PRIME_TEAM_ID` | Override the Prime Inference team request header without changing the saved Agent team |
 | `PRIME_AGENT_INFERENCE_API_BASE_URL` | Override Agent authentication and team API URLs, not model inference URLs; defaults to production |
 | `PRIME_AGENT_INFERENCE_FRONTEND_URL` | Override the Agent login browser frontend; defaults to production |
 | `PRIME_AGENT_TRACES_API_KEY` | Prime API key used only for opt-in trace sharing |
-| `PRIME_AGENT_TRACES_BASE_URL` | Override the Prime Agent trace upload API base URL |
-| `PRIME_AGENT_KERNEL_PYTHON` | Use an existing Python environment with `prime-agent-runtime` instead of bootstrapping `~/.prime/agent/kernel-venv` |
+| `PRIME_AGENT_TRACES_BASE_URL` | Override the Prime Intellect trace upload API base URL |
+| `PRIME_AGENT_KERNEL_PYTHON` | Use an existing Python environment with `prime-agent-runtime` instead of bootstrapping `~/.cyan/agent/kernel-venv` |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
-The remaining `PI_*` variables are compatibility names still read by the current runtime. They do not change the application name, command, or default `~/.prime/agent` configuration path.
+The remaining `PI_*` variables are compatibility names still read by the current runtime. They do not change the application name, command, or default `~/.cyan/agent` configuration path.
 
 ## Design Principles
 
-Prime Agent keeps the model-facing tool surface small while making the Python REPL runtime powerful and composable. The built-in `ipython` tool provides durable state, project command execution, Python skills, MCP-backed integrations, and the native `rlm` delegation API without presenting each capability as a separate model tool.
+Cyan keeps the model-facing tool surface small through persistent Julia Palette sessions. The optional IPython alternate provides Python skills and the Python `rlm` delegation API shown above.
 
 Recursive subagents are a core capability, not an optional extension. The TypeScript host owns every parent and child agent loop so recursion uses the same provider, session, tool, skill, scheduling, usage-accounting, and recovery infrastructure. The Python `rlm` package is a thin host bridge rather than a separate agent implementation.
 
-Extensions, skills, prompt templates, themes, and Prime Agent packages remain the primary customization surfaces. They can add project-specific workflows, custom tools and UI, permission policies, provider integrations, and orchestration patterns around the built-in runtime.
+Extensions, skills, prompt templates, themes, and Cyan packages remain the primary customization surfaces. They can add project-specific workflows, custom tools and UI, permission policies, provider integrations, and orchestration patterns around the built-in runtime.
 
-Prime Agent preserves MIT attribution to pi-mono for its upstream lineage, but upstream Pi product claims and limitations do not describe the current Prime Agent architecture.
+Cyan is forked from Prime Agent, which derives from pi-mono. Upstream copyright and MIT attribution are retained.

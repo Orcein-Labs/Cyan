@@ -7,6 +7,7 @@
  * identical wording.
  */
 
+import { APP_NAME } from "../../config.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import type { SettingsManager } from "../../core/settings-manager.js";
 import { spawnHidden } from "../../utils/child-process.js";
@@ -14,7 +15,7 @@ import { checkForNewPiVersion } from "../../utils/version-check.js";
 import { theme } from "../interactive/theme/theme.js";
 
 export interface StartupNotices {
-	/** Newer Prime Agent version available, if any. */
+	/** Newer application version available, if any. */
 	newVersion?: string;
 	/** Display names of extensions with available updates. */
 	packageUpdates: string[];
@@ -32,7 +33,7 @@ export interface StartupNoticeCheckOptions {
 /** Run every startup check in parallel and collect the results. */
 export async function gatherStartupNotices(options: StartupNoticeCheckOptions): Promise<StartupNotices> {
 	const [newVersion, packageUpdates, tmuxWarning] = await Promise.all([
-		checkForNewPiVersion(options.version, options.settingsManager.getUpdateChannel()),
+		APP_NAME === "cyan" ? undefined : checkForNewPiVersion(options.version, options.settingsManager.getUpdateChannel()),
 		checkForPackageUpdates(options),
 		checkTmuxKeyboardSetup(),
 	]);
@@ -102,7 +103,7 @@ export async function checkTmuxKeyboardSetup(): Promise<string | undefined> {
 	}
 
 	if (extendedKeysFormat === "xterm") {
-		return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+		return "tmux extended-keys-format is xterm. Cyan works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
 	}
 
 	return undefined;

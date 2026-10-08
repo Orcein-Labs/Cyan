@@ -1,9 +1,9 @@
 # Cyan
 
-**Cyan** is an agent harness whose model works in a persistent, sandboxed
-**Julia** kernel — including recursive sub-agents started from Julia code — with
-no IPython kernel and no Python privilege layer between the model and the
-chassis.
+**Cyan** is an agent harness with a persistent, sandboxed **Julia** workspace
+powered by **Palette**. Models can retain experiment state and start recursive
+sub-agents from Julia code. An explicit IPython alternate remains available for
+inherited workflows.
 
 Cyan is a fork and refactor of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)
 by Prime Intellect, which is itself built on Mario Zechner's
@@ -36,7 +36,7 @@ mediated by a host-side capability broker.
   call *n+1*. The model stops re-deriving what it already knows.
 - **State survives the kernel dying.** A dead kernel revives what it can from
   saved state and reports exactly what was restored, rebuilt, or lost.
-- **Sub-agents from Julia.** `Neura.rlm.spawn`, `collect`, `list_subagents`,
+- **Sub-agents from Julia.** `Palette.rlm.spawn`, `collect`, `list_subagents`,
   `find_models`, `progress_note`, `delete_subagent` and `create_session` reach
   the chassis's RLM orchestration through the kernel's broker. The permission is
   off unless the session's ceiling names it.
@@ -45,67 +45,94 @@ mediated by a host-side capability broker.
 
 ### Layout
 
-```
-packages/coding-agent/    agent chassis (TypeScript)
-  src/core/tools/palette.ts    the operator surface as the model sees it
-src/                    Neura — the Julia package (kernel session, revival, RLM)
-host/                   palette-host — Rust sandbox, session, capability broker
-security/               Python broker, session CLI, bwrap launcher, prewarm
-np2/patches/            the patch chain that implants the surface into the chassis
-drivers/                scored experiment drivers
-research/workloads/     benchmarks and the controls they are graded against
-docs/                   architecture, experiments, gap registers
+```text
+packages/       TypeScript agent loop, provider clients, sessions and terminal UI
+scripts/        setup and repository checks
+docs/           Cyan architecture and work contracts
+cyan.sh         source launcher; keeps the caller's working directory
 ```
 
-### Configuration
+[Palette](https://github.com/latentcollapse/Palette.jl) is a separately prepared
+SDK. Cyan points to its Julia project and Rust host rather than embedding a copy
+of the experimental ChatGPT lab.
 
-| Variable | Purpose |
-| --- | --- |
-| `PALETTE_SESSION_CLI` | Path to `security/session_cli.py` |
-| `PALETTE_PROJECT_DIR` | Checkout the kernel runs against |
-| `PALETTE_HOST_BIN` | Path to the `palette-host` binary (optional) |
-| `PALETTE_PAYLOAD_PARTS` | `0` restores the single-string payload form for an A/B |
-| `PALETTE_WORKSPACE_MAP` | `0` turns off the post-compaction workspace map |
-| `PALETTE_OUTPUT_DIGEST` | `0` turns off the error digest on long failing output |
-| `PALETTE_COMPACTION_NOTE` | `0` turns off the state note after compaction |
+## Requirements and source setup
 
-## Requirements
-
-- **Node.js 22.8.0+** — chassis
-- **Julia 1.12+** — operator surface
-- **bubblewrap (`bwrap`)** — sandbox isolation
-- **Python 3** — broker and launcher
-
-## Build and run
+Use Linux with Node.js 22.8+, Julia 1.12+, Python 3 and bubblewrap (`bwrap`).
+Preparing a new Palette host also requires Cargo. Native Windows launch is not
+implemented by this source path.
 
 ```bash
-npm ci
-npm run build
-./prime-agent.sh
+npm ci --ignore-scripts --no-audit --no-fund
+./cyan.sh setup --sdk /absolute/path/to/Palette
+./cyan.sh --help
 ```
 
-## Tests
+Setup instantiates the Palette Julia project, builds its host, verifies that
+Palette loads, and writes `~/.cyan/agent/palette.json`. If the SDK and host are
+already prepared, use `./cyan.sh setup --sdk /absolute/path/to/Palette --prepared`.
+Use `--depot /absolute/path/to/depot` for a dedicated existing Julia depot.
+Source launch does not require compiled TypeScript packages and works from any
+working directory. No model credentials are copied during setup.
+
+The local `cyan` wrapper, when installed on PATH, calls this source launcher.
+`CYAN_AGENT_DIR` selects a different configuration directory. Cyan also uses
+its own daemon socket there, separate from the upstream per-user daemon. `CYAN_SUBSTRATE=ipython`
+selects the inherited alternate; missing Palette setup produces an error rather
+than falling back silently. `--tools palette` explicitly selects Palette.
+
+### Local models
+
+Place an OpenAI-compatible provider in `~/.cyan/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [{ "id": "your-served-model-id", "contextWindow": 32768, "maxTokens": 4096 }]
+    }
+  }
+}
+```
+
+Start your model server separately, then run `cyan --offline --provider local
+--model your-served-model-id`. The endpoint must support tool calls. The literal
+`local` key suits a server without authentication; use your server's actual
+configuration if it requires credentials. Cloud providers remain optional.
+See [custom models](packages/coding-agent/docs/models.md) for provider details.
+
+### Runtime overrides
+
+`CYAN_PALETTE_CONFIG` selects another runtime configuration file.
+`PALETTE_PROJECT_DIR`, `PALETTE_HOST_BIN`, `PALETTE_REPO_DIR`, `PALETTE_JULIA_BIN`
+and `JULIA_DEPOT_PATH` override prepared runtime paths. Each Cyan session has
+its own kernel and durable state under the configuration directory's
+`palette-state/`. Revival reports describe which state could be recovered.
+
+## Verification
+
+Run `npm run check` for the repository checks. Targeted tests run from
+`packages/coding-agent`, for example:
 
 ```bash
-npm test                                    # chassis (vitest)
-cd packages/coding-agent
-npx vitest run test/suite/palette-substrate-modes.test.ts   # live kernel integration
+npx tsx ../../node_modules/vitest/dist/cli.js --run test/palette-runtime.test.ts
 ```
 
-The Palette Julia package:
+The existing Palette integration suite additionally needs `PALETTE_PROJECT_DIR`,
+`PALETTE_HOST_BIN`, and the prepared Julia depot. Keep its workspaces disposable;
+do not point test sessions at a live lab workspace.
 
-```bash
-julia --project=. -e 'using Pkg; Pkg.test()'
-```
+## Provider and upstream identities
 
-## Names still inherited from upstream
-
-The command (`prime-agent`), the config directory (`~/.prime/agent`),
-`PRIME_AGENT_*` environment variables and package names are compatibility
-surfaces: renaming them breaks existing installs and configuration, so they move
-in one staged migration when the Cyan name takes full effect (see
-[`REBRAND.md`](REBRAND.md)). Prime Intellect's inference service remains
-available as a model provider under its own name.
+Cyan uses `cyan` and `~/.cyan/agent` for its command and configuration.
+Third-party package names, provider identifiers and inherited internal
+`PRIME_AGENT_*` process variables keep their actual identities. Prime Intellect
+is an optional model provider, alongside other providers and local endpoints;
+its login is not required to use Cyan.
 
 ## Upstream documentation
 

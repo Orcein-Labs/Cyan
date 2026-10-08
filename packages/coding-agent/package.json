@@ -1,11 +1,11 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
 	"version": "0.9.5",
-	"description": "Coding agent CLI with a persistent Python REPL kernel and session management",
+	"description": "Cyan coding agent with persistent Julia Palette sessions; forked from Prime Agent",
 	"type": "module",
 	"piConfig": {
-		"name": "prime-agent",
-		"configDir": ".prime/agent"
+		"name": "cyan",
+		"configDir": ".cyan/agent"
 	},
 	"bin": {
 		"pi": "dist/bundle/cli.js"

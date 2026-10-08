@@ -40,6 +40,7 @@ import {
 	createPaletteBaseToolsFactory,
 	withFileMutationQueue,
 } from "./tools/index.js";
+import { cyanSubstrate, resolvePaletteRuntime } from "./tools/palette-runtime.js";
 
 export interface CreateAgentSessionOptions extends AgentSessionCreationOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -175,6 +176,22 @@ function getDefaultAgentDir(): string {
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
 	const agentDir = options.agentDir ?? getDefaultAgentDir();
+	const substrate = cyanSubstrate();
+	const explicitPalette = options.tools?.includes("palette") === true;
+	const explicitPython = options.tools?.includes("ipython") === true;
+	if (explicitPalette && explicitPython && !options.baseToolsFactory && !options.baseToolsOverride) {
+		throw new Error("cyan: select one built-in substrate: palette or ipython");
+	}
+	const usePalette =
+		(explicitPalette || (substrate === "palette" && !explicitPython)) &&
+		!options.baseToolsFactory &&
+		!options.baseToolsOverride;
+	const suppressBase =
+		usePalette && (options.noTools !== undefined || (options.tools !== undefined && !explicitPalette));
+	const baseToolsOverride = options.baseToolsOverride ?? (suppressBase ? {} : undefined);
+	const baseToolsFactory =
+		options.baseToolsFactory ??
+		(usePalette && !suppressBase ? createPaletteBaseToolsFactory(cwd, resolvePaletteRuntime(agentDir)) : undefined);
 	let resourceLoader = options.resourceLoader;
 
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
@@ -272,7 +289,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const allowedToolNames = options.allowedToolNames ?? options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const includeGoals = options.includeGoals ?? (options.tools !== undefined || options.noTools !== "all");
 	const initialActiveToolNames: string[] =
-		options.initialActiveToolNames ?? (options.tools ? [...options.tools] : options.noTools ? [] : ["ipython"]);
+		options.initialActiveToolNames ??
+		(options.tools ? [...options.tools] : options.noTools ? [] : [usePalette ? "palette" : "ipython"]);
 
 	let agent: Agent;
 
@@ -437,8 +455,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		mcpManager,
 		initialActiveToolNames,
 		allowedToolNames,
-		baseToolsOverride: options.baseToolsOverride,
-		baseToolsFactory: options.baseToolsFactory,
+		baseToolsOverride,
+		baseToolsFactory,
 		modelRequestBudget: options.modelRequestBudget,
 		includeGoals,
 		includeCompactSkill: options.includeCompactSkill,

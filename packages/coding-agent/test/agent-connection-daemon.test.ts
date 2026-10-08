@@ -578,7 +578,7 @@ class FakeDaemonClient {
 
 	async connect(): Promise<void> {
 		if (this.connected) {
-			throw new Error("Prime Agent daemon client is already connected");
+			throw new Error("Cyan daemon client is already connected");
 		}
 		this.reconnectCount++;
 		if (this.reconnectError) {
@@ -1560,7 +1560,7 @@ describe("DaemonAgentConnection", () => {
 		expect(closedEvents).toHaveLength(1);
 		expect(closedEvents[0]).toMatchObject({
 			type: "closed",
-			error: expect.stringContaining("The Prime Agent daemon shut down while this window was attached."),
+			error: expect.stringContaining("The Cyan daemon shut down while this window was attached."),
 		});
 		const closedError = closedEvents[0]?.type === "closed" ? closedEvents[0].error : undefined;
 		expect(closedError).toContain("Session ID: session-current.");
@@ -1679,7 +1679,7 @@ describe("DaemonAgentConnection", () => {
 
 			expect(closedEvents).toHaveLength(1);
 			const closedError = closedEvents[0]?.type === "closed" ? closedEvents[0].error : undefined;
-			expect(closedError).toContain("The Prime Agent daemon shut down while this window was attached.");
+			expect(closedError).toContain("The Cyan daemon shut down while this window was attached.");
 			await connection.dispose();
 		} finally {
 			vi.useRealTimers();
@@ -1751,11 +1751,9 @@ describe("DaemonAgentConnection", () => {
 
 			expect(closedEvents).toHaveLength(1);
 			const closedError = closedEvents[0]?.type === "closed" ? closedEvents[0].error : undefined;
-			expect(closedError).toContain(
-				"The Prime Agent daemon restarted for an update, but this window could not reconnect",
-			);
+			expect(closedError).toContain("The Cyan daemon restarted for an update, but this window could not reconnect");
 			expect(closedError).toContain("Last error: daemon unavailable");
-			expect(closedError).toContain("restart Prime Agent and reopen it from Agents View");
+			expect(closedError).toContain("restart Cyan and reopen it from Agents View");
 			expect(closedError).toContain("Session ID: session-current.");
 			expect(closedError).toContain("Session file: /tmp/session-current.jsonl.");
 			expect(closedError).toContain("Diagnostic log:");

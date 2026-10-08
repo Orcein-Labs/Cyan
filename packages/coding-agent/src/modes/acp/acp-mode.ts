@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { VERSION } from "../../config.js";
+import { APP_NAME, VERSION } from "../../config.js";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.js";
 import type { AgentAutonomousStatus } from "../../core/autonomous.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
@@ -732,7 +732,7 @@ export async function runAcpModeWithConnection(
 	};
 
 	const handle = acp
-		.agent({ name: "prime-agent" })
+		.agent({ name: APP_NAME })
 		.onRequest("initialize", async () => ({
 			protocolVersion: acp.PROTOCOL_VERSION,
 			agentCapabilities: {
@@ -743,7 +743,7 @@ export async function runAcpModeWithConnection(
 				// the single-session slot) instead of dropping the connection.
 				sessionCapabilities: { close: {} },
 			},
-			agentInfo: { name: "prime-agent", title: "Prime Agent", version: VERSION },
+			agentInfo: { name: APP_NAME, title: "Cyan", version: VERSION },
 			// Advertise prime-agent extras under a namespaced key: ACP reserves
 			// every object root for future protocol fields.
 			_meta: primeAgentMeta({}),
@@ -754,8 +754,7 @@ export async function runAcpModeWithConnection(
 			// snapshot reads are in flight, then overwrite each other's session.
 			if (session || sessionNewInFlight || sessionCloseInFlight) {
 				throw new Error(
-					"prime-agent ACP mode hosts one session per connection; " +
-						"start another prime-agent process for a second session",
+					"Cyan ACP mode hosts one session per connection; " + "start another Cyan process for a second session",
 				);
 			}
 			sessionNewInFlight = true;
@@ -1060,11 +1059,11 @@ export async function runAcpModeWithConnection(
 						throw new Error(`ACP lifecycle reconciliation failed: ${pending.failure}`);
 					}
 					if (pending.turnFailure) {
-						throw new Error(`prime-agent turn failed: ${pending.turnFailure}`);
+						throw new Error(`Cyan turn failed: ${pending.turnFailure}`);
 					}
 					terminalStatus = pending.status ?? status;
 				}
-				if (failure) throw new Error(`prime-agent turn failed: ${failure}`);
+				if (failure) throw new Error(`Cyan turn failed: ${failure}`);
 				return {
 					stopReason: acpStopReason({
 						cancelled: terminalSettlementCancelled,

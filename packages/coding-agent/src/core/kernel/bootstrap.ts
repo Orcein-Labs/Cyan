@@ -7,7 +7,7 @@ import { stderr, stdin } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { getPackageDir } from "../../config.js";
+import { getAgentDir, getPackageDir } from "../../config.js";
 import { isProcessAlive, spawnHidden } from "../../utils/child-process.js";
 import { tryAcquireDirLock } from "../../utils/dir-lock.js";
 import type { PythonSkillRuntimeInfo } from "../skills.js";
@@ -364,7 +364,7 @@ function ensureKernelPythonKey(pythonSkills: readonly BootstrapPythonSkill[]): s
 	return [
 		process.env.PRIME_AGENT_KERNEL_PYTHON ?? "",
 		process.env.PRIME_AGENT_KERNEL_VENV ?? "",
-		process.env.HOME ?? "",
+		getAgentDir(),
 		process.env.XDG_DATA_HOME ?? "",
 		JSON.stringify(pythonSkills),
 	].join("\0");
@@ -373,14 +373,14 @@ function ensureKernelPythonKey(pythonSkills: readonly BootstrapPythonSkill[]): s
 export function getKernelVenvDir(): string {
 	const override = process.env.PRIME_AGENT_KERNEL_VENV;
 	if (override) return path.resolve(expandHome(override));
-	return path.join(os.homedir(), ".prime", "agent", "kernel-venv");
+	return path.join(getAgentDir(), "kernel-venv");
 }
 
 function getXdgKernelVenvDir(): string {
 	const dataHome = process.env.XDG_DATA_HOME
 		? path.resolve(expandHome(process.env.XDG_DATA_HOME))
 		: path.join(os.homedir(), ".local", "share");
-	return path.join(dataHome, "prime", "agent", "kernel-venv");
+	return path.join(dataHome, "cyan", "agent", "kernel-venv");
 }
 
 async function resolveWritableKernelVenvDir(): Promise<string> {
@@ -557,7 +557,7 @@ async function ensureUv(options: EnsureKernelPythonOptions): Promise<string> {
 	if (!shouldInstallUv) {
 		throw new Error(
 			`uv is required to set up the Python kernel. Install uv yourself: ${UV_INSTALL_COMMAND}, ` +
-				"or set PRIME_AGENT_INSTALL_UV=1 to let prime-agent run that installer.",
+				"or set PRIME_AGENT_INSTALL_UV=1 to let Cyan run that installer.",
 		);
 	}
 
@@ -566,7 +566,7 @@ async function ensureUv(options: EnsureKernelPythonOptions): Promise<string> {
 		await run("sh", ["-c", UV_INSTALL_COMMAND], { stdio: options.onProgress ? "ignore" : "inherit" });
 	} catch (error) {
 		throw new Error(
-			`couldn't install uv from astral.sh; install it yourself: ${UV_INSTALL_COMMAND}, then re-run prime-agent. ${errorMessage(error)}`,
+			`couldn't install uv from astral.sh; install it yourself: ${UV_INSTALL_COMMAND}, then re-run cyan. ${errorMessage(error)}`,
 		);
 	}
 
@@ -582,7 +582,7 @@ async function confirmUvInstall(): Promise<boolean> {
 
 	const rl = createInterface({ input: stdin, output: stderr });
 	try {
-		const answer = (await rl.question("Prime Agent needs uv to set up Python. Install uv from astral.sh now? [Y/n] "))
+		const answer = (await rl.question("Cyan needs uv to set up Python. Install uv from astral.sh now? [Y/n] "))
 			.trim()
 			.toLowerCase();
 		return answer !== "n" && answer !== "no";
@@ -928,7 +928,7 @@ async function kernelReady(
 function formatBootstrapFailure(error: unknown): Error {
 	return new Error(
 		`Failed to set up the Python kernel runtime. ${errorMessage(error)}\n` +
-			"First-time setup needs internet to install uv, Python, prime-agent-runtime, and default Python packages; once set up, prime-agent runs offline. " +
+			"First-time setup needs internet to install uv, Python, prime-agent-runtime, and default Python packages; once set up, Cyan runs offline. " +
 			"An interrupted runtime upgrade needs network once more, so re-run this while online. " +
 			"Set PRIME_AGENT_KERNEL_PYTHON to a Python with a current prime-agent-runtime and default Python packages installed to skip auto-bootstrap.",
 	);

@@ -4,9 +4,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { KeybindingsManager } from "../src/core/keybindings.js";
 import { PrimeOnboardingSplashComponent } from "../src/modes/interactive/components/prime-onboarding-splash.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
-import { PRIME_COMPACT_BUTTERFLY_LOGO } from "../src/themes/prime-logo.js";
+import { CYAN_LOGO } from "../src/themes/cyan-logo.js";
 
-const logoLines = PRIME_COMPACT_BUTTERFLY_LOGO.split("\n");
+const logoLines = CYAN_LOGO.split("\n");
 const firstLogoLine = logoLines[0]?.trim() ?? "";
 
 describe("PrimeOnboardingSplashComponent", () => {
@@ -40,8 +40,8 @@ describe("PrimeOnboardingSplashComponent", () => {
 		const output = rendered.join("\n");
 
 		expect(output).toContain(firstLogoLine);
-		expect(output).toContain("Welcome to PRIME Agent");
-		expect(output).toContain("> Log in with Prime Intellect");
+		expect(output).toContain("Welcome to Cyan");
+		expect(output).toContain("> Configure models");
 		// Signing in is the only route forward.
 		expect(output).not.toContain("Continue later");
 		// The description is present and wrapped inside the block rather than
@@ -53,8 +53,8 @@ describe("PrimeOnboardingSplashComponent", () => {
 		}
 
 		const lastLogoRow = rendered.findIndex((line) => line.includes(logoLines[logoLines.length - 1]?.trim() ?? ""));
-		const brandRow = rendered.findIndex((line) => line.includes("Welcome to PRIME Agent"));
-		const actionRow = rendered.findIndex((line) => line.includes("Log in with Prime Intellect"));
+		const brandRow = rendered.findIndex((line) => line.includes("Welcome to Cyan"));
+		const actionRow = rendered.findIndex((line) => line.includes("Configure models"));
 		expect(brandRow).toBeGreaterThan(lastLogoRow);
 		expect(actionRow).toBeGreaterThan(brandRow);
 	});
@@ -67,8 +67,8 @@ describe("PrimeOnboardingSplashComponent", () => {
 		expect(output).not.toContain("Enter");
 		expect(output).not.toContain("Esc");
 
-		const brandLine = rendered.find((line) => line.includes("Welcome to PRIME Agent"));
-		const actionLine = rendered.find((line) => line.includes("Log in with Prime Intellect"));
+		const brandLine = rendered.find((line) => line.includes("Welcome to Cyan"));
+		const actionLine = rendered.find((line) => line.includes("Configure models"));
 		// One shared left edge for the welcome line and the action.
 		expect(brandLine?.indexOf("Welcome")).toBe(actionLine?.indexOf(">"));
 		// Everything hugs the left edge; only the animated field spans the pane.
@@ -76,7 +76,7 @@ describe("PrimeOnboardingSplashComponent", () => {
 		// The mark is indented a little further right than the text column, but is
 		// still left aligned rather than centred (the field spans the pane, so the
 		// mark's own glyphs pin its position rather than leading whitespace).
-		const wingGlyphs = "\u259f\u2588\u2588\u2599";
+		const wingGlyphs = firstLogoLine;
 		const markLine = rendered.find((line) => line.includes(wingGlyphs));
 		expect(markLine).toBeDefined();
 		const markColumn = markLine?.indexOf(wingGlyphs) ?? -1;
@@ -84,7 +84,7 @@ describe("PrimeOnboardingSplashComponent", () => {
 		expect(markColumn).toBeLessThanOrEqual(16);
 	});
 
-	it("starts Prime login on confirm", () => {
+	it("starts model configuration on confirm", () => {
 		let selected = false;
 		const component = new PrimeOnboardingSplashComponent(() => {
 			selected = true;
@@ -97,13 +97,13 @@ describe("PrimeOnboardingSplashComponent", () => {
 
 	it("never falls back to the intro once a flow has started", () => {
 		const component = new PrimeOnboardingSplashComponent(() => {}, { getRows: () => 36 });
-		component.setPanel({ render: () => ["panel row"], invalidate: () => {} }, "Login with Prime Intellect");
+		component.setPanel({ render: () => ["panel row"], invalidate: () => {} }, "Configure models");
 		// Between two flow panels the block must not flash the first screen back.
 		component.setPanel(undefined);
 		const output = stripAnsi(component.render(100).join("\n"));
 
-		expect(output).toContain("Welcome to PRIME Agent");
-		expect(output).not.toContain("Log in with Prime Intellect");
+		expect(output).toContain("Welcome to Cyan");
+		expect(output).not.toContain("Configure models");
 		expect(output).not.toContain("monitor dozens of experiments");
 	});
 
@@ -125,6 +125,6 @@ describe("PrimeOnboardingSplashComponent", () => {
 
 		expect(renderRequests).toBe(3);
 		expect(secondRender).not.toBe(firstRender);
-		expect(secondRender).toContain("Welcome to PRIME Agent");
+		expect(secondRender).toContain("Welcome to Cyan");
 	});
 });

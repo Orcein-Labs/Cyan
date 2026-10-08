@@ -31,7 +31,7 @@ export interface GoalState {
 	lastError?: string;
 }
 
-/** Goal payload returned to the kernel-side goal skill. Keys are Python-conventional snake_case. */
+/** Goal payload returned to the active runtime. Keys are Python-conventional snake_case. */
 export type SerializedGoal = {
 	goal_id?: string;
 	objective: string;
@@ -43,7 +43,7 @@ export type SerializedGoal = {
 	updated_at?: number;
 };
 
-/** Reply payload for goal.* host requests from the Python kernel. */
+/** Reply payload for goal.* host requests from the active runtime. */
 export type GoalHostResponse = {
 	goal: SerializedGoal | null;
 	remaining_tokens: number | null;
@@ -230,9 +230,9 @@ Goal state:
 
 The goal persists across turns. Ending one turn does not reduce or redefine the objective. If the goal is not complete yet, make concrete progress toward the full objective.
 
-Before marking the goal complete, audit the current state against every requirement in the objective. Do not rely on intent, partial progress, memory of earlier work, or a plausible final answer as proof of completion. If the objective is achieved, run \`await goal.complete()\` in the Python REPL so usage accounting is preserved.
+Before marking the goal complete, audit the current state against every requirement in the objective. Do not rely on intent, partial progress, memory of earlier work, or a plausible final answer as proof of completion. If the objective is achieved, send the \`goal.complete\` request through the active runtime so usage accounting is preserved.
 
-Do not call \`goal.complete()\` unless the goal is complete. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.`;
+Do not send the \`goal.complete\` request unless the goal is complete. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.`;
 }
 
 function budgetLimitPrompt(goal: GoalState): string {
@@ -253,7 +253,7 @@ Goal state:
 
 The system has marked the goal budget_limited. Do not start new substantive work. Wrap up this turn soon with progress made, remaining work, blockers, and a concrete next step.
 
-Do not run \`await goal.complete()\` unless the goal is actually complete.`;
+Do not send the \`goal.complete\` request unless the goal is actually complete.`;
 }
 
 function objectiveUpdatedPrompt(goal: GoalState): string {
@@ -274,7 +274,7 @@ Goal state:
 - token budget: ${budget}
 - remaining tokens: ${remaining}
 
-Adjust the current turn to pursue the updated objective. Do not run \`await goal.complete()\` unless the updated goal is actually complete.`;
+Adjust the current turn to pursue the updated objective. Do not send the \`goal.complete\` request unless the updated goal is actually complete.`;
 }
 
 function completionBudgetReport(goal: GoalState): string | null {

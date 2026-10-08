@@ -14,7 +14,7 @@ import {
 	DAEMON_WORKER_TOKEN_ENV,
 } from "../modes/daemon/daemon-worker-protocol.js";
 import { isProcessAlive, spawnHidden } from "../utils/child-process.js";
-import { createUpdatedCliSubprocessLaunchSpec } from "./subprocess-launch.js";
+import { createUpdatedCliSubprocessLaunchSpec, formatCurrentCliCommand } from "./subprocess-launch.js";
 
 export const DAEMON_UPDATE_RESTART_COORDINATOR_FLAG = "--internal-update-restart-coordinator";
 export const DAEMON_UPDATE_RESTART_STATUS_FLAG = "--internal-update-restart-status";
@@ -123,7 +123,7 @@ export function buildDaemonUpdateRestartReport(status: DaemonUpdateRestartStatus
 	if (status.phase === "failed") {
 		report.warnings.push(`Updated, but could not restart the daemon (${status.message ?? "unknown error"}).`);
 		report.warnings.push(
-			"The daemon still runs the previous version; run `prime-agent shutdown`, then run `prime-agent` to restart and apply the update.",
+			`The daemon still runs the previous version; run ${formatCurrentCliCommand(["--daemon-socket", status.socketPath, "shutdown"])}, then run ${formatCurrentCliCommand(["--daemon-socket", status.socketPath])} to restart and apply the update.`,
 		);
 	}
 	if (status.phase !== "complete" && status.phase !== "failed") {

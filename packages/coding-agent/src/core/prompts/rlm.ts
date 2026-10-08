@@ -48,11 +48,20 @@ const REPL_CONTROL_PROMPT = [
 	"",
 	"Python state in the kernel persists across cells: named variables, helper functions, classes, imports, notes, parsed outputs, and helper data structures all remain available in every later turn. Tool calls are themselves Python `await` expressions, so their return values can be bound to variables and composed into program logic just like any other call.",
 	"",
-	"Continual harness state is available as `rlm.harness` and `rlm.get_harness_state()`. CRUD calls are local to this Prime Agent session by default: `rlm.harness.create_memory(title, content, kind=...)`, `rlm.harness.update_memory(id, title, content, kind=...)`, and `rlm.harness.delete_memory(id, kind=...)`, plus `rlm.harness.overview()`. Refinement events are recorded for you whenever a refinement runs. Prompt notes, skills, and subagent specs are subtypes of memory: `kind` is one of `'prompt'`, `'memory'`, `'skill'`, `'subagent'` and defaults to `'memory'`; group entries with `topic=`. Only skill entries accept `reference=` and `arguments=`. Use `global_=True` only for stable cross-session lessons; Python reserves `global`, so literal `global=True` is invalid syntax.",
+	"Continual harness state is available as `rlm.harness` and `rlm.get_harness_state()`. CRUD calls are local to this Cyan session by default: `rlm.harness.create_memory(title, content, kind=...)`, `rlm.harness.update_memory(id, title, content, kind=...)`, and `rlm.harness.delete_memory(id, kind=...)`, plus `rlm.harness.overview()`. Refinement events are recorded for you whenever a refinement runs. Prompt notes, skills, and subagent specs are subtypes of memory: `kind` is one of `'prompt'`, `'memory'`, `'skill'`, `'subagent'` and defaults to `'memory'`; group entries with `topic=`. Only skill entries accept `reference=` and `arguments=`. Use `global_=True` only for stable cross-session lessons; Python reserves `global`, so literal `global=True` is invalid syntax.",
 	"",
 	"Terminology: continual harness names the persisted prompt, memory, skill, and subagent layer; RLM names the runtime, Python REPL kernel, and native call interface exposed to the model.",
 	"",
 	"RLM-native call contract: installed Python skills are pre-imported modules. Read the matching SKILL.md and call its documented function, such as `await <skill_import>.<function>(...)`; when a CLI exists, use `<skill_import> ...` from shell. Continual harness skill entries are Python REPL skills with an explicit Python `reference` and `arguments` contract. Spawn a reusable delegation spec with `await rlm.spawn('sub-task', name='worker')`; admission returns a child handle immediately. Results arrive only through an available messaging capability or files, never as an `rlm.spawn()` return value. Do not invent non-native wrappers such as `call_skill(...)` or `run_subagent(...)`.",
+].join("\n");
+
+const PALETTE_CONTROL_PROMPT = [
+	"The `palette` tool runs Julia in a persistent Palette workspace. Bind inspected files, parsed data, experiment results, and helper functions to named variables and reuse them across calls. Use idiomatic Julia for orchestration; Python REPL syntax and pre-imported Python skill modules are not available here.",
+	"Use `read(path, String)`, `write(path, content)`, `readdir`, `pwd()`, and `cd(path)` for workspace files. `varinfo()` describes live bindings and `kernelinfo()` describes the kernel. Paths outside the approved workspace may be read-only or inaccessible. Request only capabilities actually exposed by the tool; a successful computation does not grant host authority.",
+	'`bash("command")` or `sh"command"` returns a ShellResult with `exitcode`, `stdout`, and `stderr`. It blocks until the command finishes. For independent long-running work, retain a named Julia task such as `job = @async bash("command")`, end the turn, then inspect `istaskdone(job)` and `fetch(job)` in a later call. Do not assume Python bash handles or automatic completion notifications exist.',
+	"Bindings persist between calls. After a kernel restart, read the revival report to learn which values survived, changed, or were lost. Keep large or irreplaceable inputs and outputs in workspace files; do not treat in-memory state as a backup. Ephemeral calls run separately and do not add bindings to the persistent world.",
+	"Run external projects through their own environment and normal commands. Do not modify the Julia runtime hosting Palette in place. For compiler experiments, use isolated source worktrees, builds, baselines, and result artifacts.",
+	'Goal control, when enabled by the host, uses `Palette.host_request("goal.get")`, `Palette.host_request("goal.create", Dict("objective" => "..."))`, and `Palette.host_request("goal.complete")`. Mark a goal complete only after its objective has been achieved.',
 ].join("\n");
 
 export interface ChildAgentDoctrineOptions {
@@ -65,6 +74,7 @@ export interface ChildAgentDoctrineOptions {
 export function buildChildAgentDoctrine(options: ChildAgentDoctrineOptions): string | undefined {
 	const depth = options.depth ?? 0;
 	const hasIpython = options.activeTools === undefined || options.activeTools.includes("ipython");
+	const hasPalette = options.activeTools?.includes("palette") ?? false;
 	const hasAgentMessage = options.installedSkills?.includes("agent_message") ?? false;
 	if (depth <= 0) return undefined;
 
@@ -81,6 +91,11 @@ export function buildChildAgentDoctrine(options: ChildAgentDoctrineOptions): str
 			"For long-running work, report brief progress with `await rlm.progress_note('...')` (at most 512 characters, throttled to about one note per 10 seconds); the parent sees notes without needing a reply.",
 		);
 	}
+	if (hasPalette) {
+		lines.push(
+			'Report brief parent progress with `Palette.rlm.progress_note("...")` when permitted by the session ceiling. Keep durable results in workspace files and expose their paths in your final answer.',
+		);
+	}
 	return lines.join("\n");
 }
 
@@ -93,6 +108,7 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 	const depth = options.depth ?? 0;
 	const activeTools = options.activeTools ?? [];
 	const hasIpython = options.activeTools === undefined ? true : activeTools.includes("ipython");
+	const hasPalette = activeTools.includes("palette");
 	const canRunShellSkills = hasIpython || activeTools.includes("bash");
 	const parts = [
 		"You are a general purpose agent that uses code to solve tasks.",
@@ -194,6 +210,16 @@ export function buildRlmPrompt(options: RlmPromptOptions): string {
 		parts.push(
 			"Spawn independent children in separate calls and end your turn instead of awaiting completion. Multiple replies may arrive over multiple turns. Delete a direct child explicitly with `await rlm.delete_subagent(child)` when it is no longer needed.",
 		);
+	}
+
+	if (hasPalette) {
+		parts.push("", PALETTE_CONTROL_PROMPT);
+		if (allowRecursion) {
+			parts.push(
+				"",
+				'When the tool description exposes recursive delegation, use `child = Palette.rlm.spawn("task"; name="worker")`. Admission returns immediately, not the child\'s answer. Recover direct children with `Palette.rlm.list_subagents()` and inspect results with `Palette.rlm.collect(child; timeout_ms=0)`. Spawn independent tasks, retain their handles, and collect in a later call. Children inherit the parent model unless an explicitly requested exact model selector is supplied. Delete an unused direct child with `Palette.rlm.delete_subagent(child)`. These requests remain subject to the session ceiling and host recursion limits.',
+			);
+		}
 	}
 
 	if (hasIpython) {

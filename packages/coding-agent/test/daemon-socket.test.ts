@@ -4,7 +4,7 @@ import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	cleanupDaemonSocketPath,
 	DaemonSocketPathLease,
@@ -40,6 +40,17 @@ describe("defaultDaemonSocketPath", () => {
 
 		expect(dirname(socketPath)).toBe(join(tmpdir(), `prime-agent-${suffix}`));
 		expect(basename(socketPath)).toBe("daemon.sock");
+		try {
+			vi.stubEnv("CYAN_SUBSTRATE", "palette");
+			vi.stubEnv("PRIME_AGENT_CODING_AGENT_DIR", join(tmpdir(), "cyan-config"));
+			expect(defaultDaemonSocketPath()).toBe(join(tmpdir(), "cyan-config", "daemon.sock"));
+			vi.stubEnv("CYAN_CODING_AGENT_DIR", join(tmpdir(), "cyan-config-env"));
+			expect(defaultDaemonSocketPath()).toBe(join(tmpdir(), "cyan-config-env", "daemon.sock"));
+			vi.stubEnv("CYAN_AGENT_DIR", join(tmpdir(), "cyan-config-explicit"));
+			expect(defaultDaemonSocketPath()).toBe(join(tmpdir(), "cyan-config-explicit", "daemon.sock"));
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("checks a live daemon before acquiring the socket path lock", async () => {

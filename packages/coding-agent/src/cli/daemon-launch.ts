@@ -171,10 +171,10 @@ export class StaleDaemonError extends Error {
 			: `Daemon: unknown build on ${socketPath}`;
 		const client = getDaemonRuntimeIdentity();
 		super(
-			`An incompatible Prime Agent daemon is running.\n\n${daemonIdentity}\n` +
+			`An incompatible Cyan daemon is running.\n\n${daemonIdentity}\n` +
 				`Client: v${VERSION}, protocol ${DAEMON_PROTOCOL_VERSION}, schema ${DAEMON_SCHEMA_ID}, build ${client.buildId}, ` +
 				`executable ${client.launcherPath ?? client.entrypointPath ?? client.executablePath}\n\nRun:\n` +
-				`${formatCurrentCliCommand(["shutdown", "--force"])}\n\nThen retry the original command.`,
+				`${formatCurrentCliCommand(["--daemon-socket", socketPath, "shutdown", "--force"])}\n\nThen retry the original command.`,
 		);
 		this.name = "StaleDaemonError";
 	}
@@ -364,11 +364,11 @@ async function ensureDaemonRunning(socketPath: string, spawnCwd?: string): Promi
 	}
 	if (probe.status === "unresponsive") {
 		throw new Error(
-			`Prime Agent daemon on ${socketPath} accepted connections but did not finish startup within ${DAEMON_STARTUP_TIMEOUT_MS / 1000} seconds. ` +
+			`Cyan daemon on ${socketPath} accepted connections but did not finish startup within ${DAEMON_STARTUP_TIMEOUT_MS / 1000} seconds. ` +
 				`It was left running to avoid interrupting active work.
 
 Run:
-${formatCurrentCliCommand(["shutdown", "--force"])}
+${formatCurrentCliCommand(["--daemon-socket", socketPath, "shutdown", "--force"])}
 
 Then retry the original command.`,
 		);
@@ -431,12 +431,10 @@ Then retry the original command.`,
 		}
 		const logTail = readDaemonLogTail(socketPath, logOffset);
 		if (childFailure.type === "error") {
-			throw new Error(`Failed to spawn Prime Agent daemon: ${childFailure.error.message}.${logTail}`);
+			throw new Error(`Failed to spawn Cyan daemon: ${childFailure.error.message}.${logTail}`);
 		}
 		const signal = childFailure.signal ? `, signal ${childFailure.signal}` : "";
-		throw new Error(
-			`Prime Agent daemon exited during startup (code ${childFailure.code ?? "unknown"}${signal}).${logTail}`,
-		);
+		throw new Error(`Cyan daemon exited during startup (code ${childFailure.code ?? "unknown"}${signal}).${logTail}`);
 	};
 
 	// A child exit is not immediately fatal: it may have lost the socket to a

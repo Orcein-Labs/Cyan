@@ -2834,30 +2834,43 @@ export class AgentSession {
 	}
 
 	/**
-	 * Goals are pursued through the kernel goal skill, so the only tool the
-	 * model needs is ipython. Force-activate it (including into a live
-	 * continuation context) so the model can always reach `goal.complete()`.
+	 * Goals use the active runtime's host interface as their control tool.
+	 * Force-activate it for live continuations so the model can always complete
+	 * the goal through the host.
 	 */
 	private _ensureGoalRuntimeActive(context?: AgentContext): void {
 		if (!this._includeGoals) {
 			throw new Error("Goals are disabled. Enable goals before using /goal.");
 		}
-		const ipythonTool = this._toolRegistry.get("ipython");
-		if (!ipythonTool) {
-			throw new Error("Goals require the ipython tool, which is not available in this session.");
+		const goalToolName = this._goalRuntimeToolName(this._toolRegistry.keys());
+		const goalTool = goalToolName ? this._toolRegistry.get(goalToolName) : undefined;
+		if (!goalToolName || !goalTool) {
+			throw new Error("Goals require an available goal-control runtime (IPython or Palette) in this session.");
 		}
 		const activeToolNames = new Set(this.getActiveToolNames());
-		if (!activeToolNames.has("ipython")) {
-			activeToolNames.add("ipython");
+		if (!activeToolNames.has(goalToolName)) {
+			activeToolNames.add(goalToolName);
 			this.setActiveToolsByName([...activeToolNames]);
 		}
 		if (context) {
 			const contextTools = [...(context.tools ?? [])];
-			if (!contextTools.some((tool) => tool.name === "ipython")) {
-				contextTools.push(ipythonTool);
+			if (!contextTools.some((tool) => tool.name === goalToolName)) {
+				contextTools.push(goalTool);
 				context.tools = contextTools;
 			}
 		}
+	}
+
+	/**
+	 * Preserve explicit IPython control where it is available, and fall back to
+	 * Palette for sessions whose host-backed goal requests use that runtime.
+	 */
+	private _goalRuntimeToolName(toolNames: Iterable<string>): "ipython" | "palette" | undefined {
+		const available = new Set(toolNames);
+		if (available.has("ipython")) {
+			return "ipython";
+		}
+		return available.has("palette") ? "palette" : undefined;
 	}
 
 	private _maybeResumeGoalContinuationAfterRlmWork(): void {
@@ -4033,8 +4046,8 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle a goal.* request from the Python kernel host bridge (the bundled
-	 * goal skill). All goal state stays host-side; the kernel only sees the
+	 * Handle a goal.* request from the active runtime's host bridge. All goal
+	 * state stays host-side; the runtime only sees the
 	 * serialized snake_case response.
 	 */
 	handleGoalHostRequest(type: string, payload: Record<string, unknown> = {}): GoalHostResponse {
@@ -4341,7 +4354,7 @@ export class AgentSession {
 		switch (this._goalState.status) {
 			case "active":
 				throw new Error(
-					"cannot create a new goal because this thread already has an active goal; run `await goal.complete()` when it is achieved, or ask the user to clear it with /goal clear",
+					"cannot create a new goal because this thread already has an active goal; complete it through the active runtime's goal interface when achieved, or ask the user to clear it with /goal clear",
 				);
 			case "paused":
 				throw new Error(
@@ -11016,17 +11029,20 @@ export class AgentSession {
 		const defaultActiveToolNames = this._baseToolsOverride ? Object.keys(this._baseToolsOverride) : ["ipython"];
 		const baseActiveToolNames = [...(options.activeToolNames ?? defaultActiveToolNames)];
 		if (this._goalState.status === "active" && this._includeGoals) {
-			if (!this._ipythonKernelProvisioner) {
-				// baseToolsOverride sessions have no kernel to push ipython back into.
-				// Pushing the name anyway would be silently dropped by
-				// setActiveToolsByName (unknown tool names are skipped, not errored),
-				// leaving the goal believing it has ipython access when it does not.
+			const goalToolName = this._goalRuntimeToolName(
+				Object.keys(configuredBaseToolDefinitions).filter(
+					(name) => !this._allowedToolNames || this._allowedToolNames.has(name),
+				),
+			);
+			if (!goalToolName) {
+				// Unknown tool names are silently dropped by setActiveToolsByName.
+				// Fail here so a resumed goal cannot believe it has control access
+				// when this runtime cannot provide it.
 				throw new Error(
-					"An active goal requires the ipython tool, which is not available in this session (baseToolsOverride is set). Complete or clear the goal before building a session without ipython.",
+					"An active goal requires an available goal-control runtime (IPython or Palette), but neither is available in this session (baseToolsOverride is set). Complete or clear the goal before building a session without a goal-control runtime.",
 				);
 			}
-			// An active goal needs ipython so the model can reach the goal skill.
-			baseActiveToolNames.push("ipython");
+			baseActiveToolNames.push(goalToolName);
 		}
 		this._refreshToolRegistry({
 			activeToolNames: [...new Set(baseActiveToolNames)],

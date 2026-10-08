@@ -1622,7 +1622,7 @@ describe("agents view open during a daemon update restart", () => {
 		[
 			"waits through the update restart and surfaces the wait notice",
 			true,
-			"Waited for the Prime Agent daemon update restart to finish",
+			"Waited for the Cyan daemon update restart to finish",
 		],
 		[
 			"surfaces a permanent create failure unmasked by the wait",
@@ -1667,32 +1667,35 @@ describe("agents view open during a daemon update restart", () => {
 
 describe("waitThroughDaemonUpdateRestart", () => {
 	const updateRestartDeadline =
-		/The Prime Agent daemon did not finish its update restart within \d+ seconds\. Try opening this agent again once the update finishes\. Last error: Daemon is preparing an update restart/;
+		/The Cyan daemon did not finish its update restart within \d+ seconds\. Try opening this agent again once the update finishes\. Last error: Daemon is preparing an update restart/;
 
 	// Post-arm transient shapes only; arming is pinned at the loop/deadline layers.
-	it("retries every restart-transient failure and reports that it waited", async () => {
-		const transientFailures = [
-			() => new Error("Failed to connect to the Prime Agent daemon: connect ENOENT"),
-			() => Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
-			() => new Error("Connection to the Prime Agent daemon closed."),
-			() => new Error('Timed out after 30000ms waiting for the Prime Agent daemon response to "create".'),
-			() => new DaemonControlPlaneTransportError(new Error("Connection to the Prime Agent daemon closed.")),
-			() => new Error("Unknown active session: update-restart-session"),
-			() => new DaemonSessionRecoveringError("update-restart-session"),
-		];
-		let attempts = 0;
-		const outcome = await waitThroughDaemonUpdateRestart(
-			async () => {
-				attempts += 1;
-				if (attempts === 1) throw new DaemonUpdateRestartingError();
-				const failure = transientFailures[attempts - 2];
-				if (failure) throw failure();
-				return "opened";
-			},
-			{ waitMs: 5_000, retryMs: 1 },
-		);
-		expect(outcome).toEqual({ result: "opened", waitedForUpdateRestart: true });
-	});
+	it.each(["Cyan", "Prime Agent"])(
+		"retries %s restart-transient failures and reports that it waited",
+		async (brand) => {
+			const transientFailures = [
+				() => new Error(`Failed to connect to the ${brand} daemon: connect ENOENT`),
+				() => Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+				() => new Error(`Connection to the ${brand} daemon closed.`),
+				() => new Error(`Timed out after 30000ms waiting for the ${brand} daemon response to "create".`),
+				() => new DaemonControlPlaneTransportError(new Error(`Connection to the ${brand} daemon closed.`)),
+				() => new Error("Unknown active session: update-restart-session"),
+				() => new DaemonSessionRecoveringError("update-restart-session"),
+			];
+			let attempts = 0;
+			const outcome = await waitThroughDaemonUpdateRestart(
+				async () => {
+					attempts += 1;
+					if (attempts === 1) throw new DaemonUpdateRestartingError();
+					const failure = transientFailures[attempts - 2];
+					if (failure) throw failure();
+					return "opened";
+				},
+				{ waitMs: 5_000, retryMs: 1 },
+			);
+			expect(outcome).toEqual({ result: "opened", waitedForUpdateRestart: true });
+		},
+	);
 
 	it("propagates a non-update failure before any update-restart signal", async () => {
 		let attempts = 0;

@@ -6,9 +6,56 @@ import {
 	planReap,
 	planShutdownAll,
 	planShutdownConfirmation,
+	shutdownSocketPathScope,
 	verifyHelloSupervisorPid,
 } from "../src/cli/daemon-ps.js";
 import { getProcessStartId } from "../src/core/session-lease.js";
+import { defaultDaemonSocketPath } from "../src/modes/daemon/daemon-socket.js";
+
+describe("shutdownSocketPathScope", () => {
+	it.each(["CYAN_AGENT_DIR", "CYAN_CODING_AGENT_DIR", "PRIME_AGENT_CODING_AGENT_DIR"])(
+		"scopes Cyan shutdown to its selected daemon socket when %s is set",
+		(agentDirEnv) => {
+			const agentDirEnvs = ["CYAN_AGENT_DIR", "CYAN_CODING_AGENT_DIR", "PRIME_AGENT_CODING_AGENT_DIR"] as const;
+			const previousAgentDirs = new Map(agentDirEnvs.map((key) => [key, process.env[key]]));
+			const previousSubstrate = process.env.CYAN_SUBSTRATE;
+			try {
+				for (const key of agentDirEnvs) delete process.env[key];
+				process.env.CYAN_SUBSTRATE = "palette";
+				process.env[agentDirEnv] = "/tmp/cyan-agent";
+				expect(shutdownSocketPathScope()).toBe(
+					process.platform === "win32" ? undefined : defaultDaemonSocketPath(),
+				);
+			} finally {
+				if (previousSubstrate === undefined) delete process.env.CYAN_SUBSTRATE;
+				else process.env.CYAN_SUBSTRATE = previousSubstrate;
+				for (const [key, value] of previousAgentDirs) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
+			}
+		},
+	);
+
+	it("honors an explicitly selected socket", () => {
+		expect(shutdownSocketPathScope("/tmp/custom-daemon.sock")).toBe("/tmp/custom-daemon.sock");
+	});
+
+	it("keeps upstream shutdown unscoped outside Cyan", () => {
+		const previousSubstrate = process.env.CYAN_SUBSTRATE;
+		const previousAgentDir = process.env.PRIME_AGENT_CODING_AGENT_DIR;
+		try {
+			delete process.env.CYAN_SUBSTRATE;
+			process.env.PRIME_AGENT_CODING_AGENT_DIR = "/tmp/cyan-agent";
+			expect(shutdownSocketPathScope()).toBeUndefined();
+		} finally {
+			if (previousSubstrate === undefined) delete process.env.CYAN_SUBSTRATE;
+			else process.env.CYAN_SUBSTRATE = previousSubstrate;
+			if (previousAgentDir === undefined) delete process.env.PRIME_AGENT_CODING_AGENT_DIR;
+			else process.env.PRIME_AGENT_CODING_AGENT_DIR = previousAgentDir;
+		}
+	});
+});
 
 it("recognizes Windows worker named pipes on every platform", () => {
 	expect(isWorkerSocketPath("\\\\.\\pipe\\prime-agent-worker-98ed5cb228d2-5b1d3aeb91ee")).toBe(true);

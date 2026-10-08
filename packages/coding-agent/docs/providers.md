@@ -1,6 +1,8 @@
 # Providers
 
-Prime Agent supports subscription-based providers via OAuth and API key providers via environment variables or the auth file. Models for external providers are bundled with each release. Prime Inference models refresh from its `/models` endpoint, with the bundled list and a validated disk cache as fallbacks. Set `PI_OFFLINE=1` to skip network refreshes.
+Cyan supports subscription-based providers via OAuth and API key providers via environment variables or the auth file. Models for external providers are bundled with each release. Prime Inference models refresh from its `/models` endpoint, with the bundled list and a validated disk cache as fallbacks. Set `PI_OFFLINE=1` to skip network refreshes.
+
+Fresh Cyan onboarding does not require Prime Intellect login. Configure a supported provider with `/login`, or add a local OpenAI-compatible endpoint to `~/.cyan/agent/models.json` and select it with `/model`. The repository [README](../../../README.md) includes a complete local endpoint example. Existing provider IDs and credential names remain unchanged.
 
 ## Table of Contents
 
@@ -20,12 +22,12 @@ Use `/login` in interactive mode, then select a provider:
 - GitHub Copilot
 - xAI Grok (eligible subscriptions)
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.prime/agent/auth.json` and auto-refresh when expired.
+Use `/logout` to clear credentials. Tokens are stored in `~/.cyan/agent/auth.json` and auto-refresh when expired.
 
 ### OpenAI Codex
 
 - Requires ChatGPT Plus or Pro subscription
-- Officially endorsed by OpenAI: [Codex for OSS](https://developers.openai.com/community/codex-for-oss)
+- Check your subscription entitlement before selecting a model.
 
 ### Claude Pro/Max
 
@@ -56,7 +58,7 @@ Use `/login` in interactive mode and select a provider to store an API key in `a
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-prime-agent
+cyan
 ```
 
 | Provider | Environment Variable | `auth.json` key |
@@ -92,7 +94,7 @@ Reference for environment variables and `auth.json` keys: [`env-api-keys.ts`](..
 
 #### Auth File
 
-Store credentials in `~/.prime/agent/auth.json`:
+Store credentials in `~/.cyan/agent/auth.json`:
 
 ```json
 {
@@ -134,7 +136,7 @@ OAuth credentials are also stored here after `/login` and managed automatically.
 
 ### Prime Inference
 
-Prime Inference uses the production OpenAI-compatible endpoint at `https://api.pinference.ai/api/v1`. Set `PRIME_API_KEY` or use `/login` to save a key for `prime-inference` in `~/.prime/agent/auth.json`.
+Prime Inference uses the production OpenAI-compatible endpoint at `https://api.pinference.ai/api/v1`. Set `PRIME_API_KEY` or use `/login` to save a key for `prime-inference` in `~/.cyan/agent/auth.json`.
 
 Normal startup, model discovery, inference, credential status, and team selection do not read Prime CLI credentials or URLs from `~/.prime/config.json`. If you previously relied on CLI credentials, run `/login` once. During this explicit login, Agent can reuse a CLI key only when every configured CLI URL is a canonical production URL (or absent), the resolved Agent login destinations are production, and production `/whoami` validates the key. Local or development CLI configuration falls back to the browser login flow, which defaults to production.
 
@@ -185,14 +187,14 @@ export AWS_REGION=us-west-2
 Also supports ECS task roles (`AWS_CONTAINER_CREDENTIALS_*`) and IRSA (`AWS_WEB_IDENTITY_TOKEN_FILE`).
 
 ```bash
-prime-agent --provider amazon-bedrock --model us.anthropic.claude-sonnet-4-20250514-v1:0
+cyan --provider amazon-bedrock --model us.anthropic.claude-sonnet-4-20250514-v1:0
 ```
 
 Prompt caching is enabled automatically for Claude models whose ID contains a recognizable model name (base models and system-defined inference profiles). For application inference profiles (whose ARNs don't contain the model name), set `AWS_BEDROCK_FORCE_CACHE=1` to enable cache points:
 
 ```bash
 export AWS_BEDROCK_FORCE_CACHE=1
-prime-agent --provider amazon-bedrock --model arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123
+cyan --provider amazon-bedrock --model arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123
 ```
 
 If you are connecting to a Bedrock API proxy, the following environment variables can be used:
@@ -216,7 +218,7 @@ export AWS_BEDROCK_FORCE_HTTP1=1
 export CLOUDFLARE_API_KEY=...           # or use /login
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_GATEWAY_ID=...        # create at dash.cloudflare.com → AI → AI Gateway
-prime-agent --provider cloudflare-ai-gateway --model "claude-sonnet-4-5"
+cyan --provider cloudflare-ai-gateway --model "claude-sonnet-4-5"
 ```
 
 Routes to OpenAI and Anthropic through Cloudflare AI Gateway. OpenAI uses the OpenAI passthrough route (`/openai`) with native OpenAI model IDs such as `gpt-5.1`. Anthropic uses the Anthropic passthrough route (`/anthropic`) with native Anthropic model IDs such as `claude-sonnet-4-5`. Cloudflare-hosted `@cf/...` models are available through the separate `cloudflare-workers-ai` provider.
@@ -230,7 +232,7 @@ AI Gateway authentication uses `CLOUDFLARE_API_KEY` as `cf-aig-authorization`. U
 | Stored BYOK | Cloudflare token only | Cloudflare injects provider keys stored in the AI Gateway dashboard |
 | Inline BYOK | Cloudflare token plus upstream `Authorization` header | The request supplies the upstream provider key |
 
-For normal Prime Agent usage, prefer unified billing or stored BYOK. Inline BYOK requires configuring an additional upstream `Authorization` header for the Cloudflare AI Gateway provider, for example via a `models.json` provider/model override.
+For normal Cyan usage, prefer unified billing or stored BYOK. Inline BYOK requires configuring an additional upstream `Authorization` header for the Cloudflare AI Gateway provider, for example via a `models.json` provider/model override.
 
 ### Cloudflare Workers AI
 
@@ -239,10 +241,10 @@ For normal Prime Agent usage, prefer unified billing or stored BYOK. Inline BYOK
 ```bash
 export CLOUDFLARE_API_KEY=...           # or use /login
 export CLOUDFLARE_ACCOUNT_ID=...
-prime-agent --provider cloudflare-workers-ai --model "@cf/moonshotai/kimi-k2.6"
+cyan --provider cloudflare-workers-ai --model "@cf/moonshotai/kimi-k2.6"
 ```
 
-Prime Agent automatically sets `x-session-affinity` for [prefix caching](https://developers.cloudflare.com/workers-ai/features/prompt-caching/) discounts.
+Cyan automatically sets `x-session-affinity` for [prefix caching](https://developers.cloudflare.com/workers-ai/features/prompt-caching/) discounts.
 
 ### Google Vertex AI
 

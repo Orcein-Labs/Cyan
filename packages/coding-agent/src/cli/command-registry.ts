@@ -107,10 +107,10 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 	},
 	{
 		path: ["shutdown"],
-		usage: "shutdown [--force] [--json]",
-		summary: "Stop every agent and background service",
+		usage: "shutdown [--daemon-socket <path>] [--force] [--json]",
+		summary: "Stop agents and services owned by the selected daemon",
 		description: "Without --force, an interactive confirmation is required. --force also kills unresponsive workers.",
-		options: ["--force  Skip confirmation and kill unresponsive processes", "--json   Print JSON"],
+		options: ["--daemon-socket <path>  Stop only this daemon", "--force  Skip confirmation and kill unresponsive processes", "--json   Print JSON"],
 	},
 	{
 		path: ["mcp"],
@@ -169,7 +169,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 	{
 		path: ["update"],
 		usage: "update [--force] [--rollback] [--nightly|--stable]",
-		summary: "Update Prime Agent",
+		summary: "Update Cyan",
 		options: [
 			"--force     Reinstall even if the current version is the latest on the channel",
 			"--rollback  Restore the previous compiled release",
@@ -325,14 +325,16 @@ export function findCommandSuggestion(input: string, candidates: readonly string
 }
 
 export function formatTopLevelHelp(): string {
+	const commandName = process.env.CYAN_SUBSTRATE ? "cyan" : APP_NAME;
+	const runtime = process.env.CYAN_SUBSTRATE === "palette" ? "persistent Julia Palette" : "Python REPL";
 	const commands = COMMAND_SPECS.filter((spec) => spec.path.length === 1);
 	const commandWidth = Math.max(...commands.map((spec) => spec.path[0]!.length));
 	const options = TOP_LEVEL_OPTION_GROUPS.map((group) => formatOptionGroup(group.heading, group.options)).join("\n\n");
-	return `${APP_NAME} - AI coding assistant with a Python REPL tool
+	return `${commandName} - AI coding assistant with a ${runtime} tool
 
 Usage:
-  ${APP_NAME} [options] [@files...] [message...]
-  ${APP_NAME} <command> [args...]
+  ${commandName} [options] [@files...] [message...]
+  ${commandName} <command> [args...]
 
 Options:
 ${options}
@@ -340,7 +342,7 @@ ${options}
 Commands:
 ${commands.map((spec) => `  ${spec.path[0]!.padEnd(commandWidth)}  ${spec.summary}`).join("\n")}
 
-Run "${APP_NAME} help <command>" for command details.`;
+Run "${commandName} help <command>" for command details.`;
 }
 
 function formatOptionGroup(heading: string, options: readonly TopLevelOption[]): string {
@@ -349,12 +351,13 @@ function formatOptionGroup(heading: string, options: readonly TopLevelOption[]):
 }
 
 export function formatCommandHelp(path: readonly string[]): string | undefined {
+	const commandName = process.env.CYAN_SUBSTRATE ? "cyan" : APP_NAME;
 	const spec = getCommandSpec(path);
 	if (!spec) {
 		return undefined;
 	}
 	const children = getChildCommandSpecs(path);
-	const sections = [`Usage:\n  ${APP_NAME} ${spec.usage}`, "", `${spec.summary}.`];
+	const sections = [`Usage:\n  ${commandName} ${spec.usage}`, "", `${spec.summary}.`];
 	if (spec.description) {
 		sections.push("", spec.description);
 	}
@@ -370,7 +373,7 @@ export function formatCommandHelp(path: readonly string[]): string | undefined {
 		sections.push("", "Options:", ...spec.options.map((option) => `  ${option}`));
 	}
 	if (spec.examples && spec.examples.length > 0) {
-		sections.push("", "Examples:", ...spec.examples.map((example) => `  ${APP_NAME} ${example}`));
+		sections.push("", "Examples:", ...spec.examples.map((example) => `  ${commandName} ${example}`));
 	}
 	return sections.join("\n");
 }

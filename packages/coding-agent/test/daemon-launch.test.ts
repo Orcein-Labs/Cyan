@@ -264,7 +264,9 @@ describe("ensureInteractiveDaemonRunning", () => {
 		});
 		cleanups.push(daemon.close);
 
-		await expect(ensureInteractiveDaemonRunning(daemon.socketPath)).rejects.toThrow("incompatible");
+		await expect(ensureInteractiveDaemonRunning(daemon.socketPath)).rejects.toThrow(
+			`--daemon-socket ${daemon.socketPath} shutdown --force`,
+		);
 		expect(commands).not.toContain("list");
 		expect(commands).not.toContain("shutdown");
 	});
@@ -400,7 +402,7 @@ describe("ensureInteractiveDaemonRunning", () => {
 
 		try {
 			await expect(ensureInteractiveDaemonRunning(socketPath)).rejects.toThrow(
-				/Prime Agent daemon exited during startup \(code 23\)\.[\s\S]*fatal startup failure/,
+				/Cyan daemon exited during startup \(code 23\)\.[\s\S]*fatal startup failure/,
 			);
 			expect(Date.now() - startedAt).toBeLessThan(10_000);
 		} finally {
@@ -441,7 +443,7 @@ describe("ensureInteractiveDaemonRunning", () => {
 
 		try {
 			await expect(ensureInteractiveDaemonRunning(socketPath, join(dir, "missing-cwd"))).rejects.toThrow(
-				/Failed to spawn Prime Agent daemon: .*ENOENT/,
+				/Failed to spawn Cyan daemon: .*ENOENT/,
 			);
 		} finally {
 			if (originalAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
