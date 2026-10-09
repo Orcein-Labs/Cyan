@@ -216,12 +216,40 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 }
 
 /**
+ * Caps the reserve at a quarter of the context window, so the trigger sits at 75%.
+ *
+ * The default reserve (16384) is larger than a 4k, 8k or 16k window. The threshold
+ * is then zero or negative and compaction fires every turn. The reserve is unchanged
+ * from a 64k window up.
+ *
+ * The default keep budget (20000) is capped the same way. Above the window, the cut
+ * point keeps everything and nothing is summarized. An explicit keepRecentTokens is
+ * honored as configured, so a value equal to the default is capped too.
+ */
+export const COMPACTION_WINDOW_CAP_DIVISOR = 4;
+
+export function clampCompactionSettings(settings: CompactionSettings, contextWindow: number): CompactionSettings {
+	if (!(contextWindow > 0)) return settings;
+	const cap = Math.floor(contextWindow / COMPACTION_WINDOW_CAP_DIVISOR);
+	const keepRecentTokens =
+		settings.keepRecentTokens === DEFAULT_COMPACTION_SETTINGS.keepRecentTokens
+			? Math.min(settings.keepRecentTokens, cap)
+			: settings.keepRecentTokens;
+	return {
+		...settings,
+		reserveTokens: Math.min(settings.reserveTokens, cap),
+		keepRecentTokens,
+	};
+}
+
+/**
  * Check if compaction should trigger based on context usage.
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
 	if (contextWindow <= 0) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	const { reserveTokens } = clampCompactionSettings(settings, contextWindow);
+	return contextTokens > contextWindow - reserveTokens;
 }
 /**
  * Estimate token count for a message using chars/4 heuristic.

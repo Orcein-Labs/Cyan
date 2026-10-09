@@ -108,6 +108,7 @@ import {
 	COMPACT_SKILL_NAME,
 	type CompactionResult,
 	calculateContextTokens,
+	clampCompactionSettings,
 	collectEntriesForBranchSummary,
 	compact,
 	estimateBranchSummaryRequestTokens,
@@ -429,6 +430,7 @@ export type AgentSessionEvent =
 			customInstructions?: string;
 	  }
 	| { type: "session_info_changed"; name: string | undefined }
+	| { type: "model_notice"; message: string }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
 	| { type: "service_tier_changed"; serviceTier: ServiceTier }
 	| {
@@ -2795,6 +2797,17 @@ export class AgentSession {
 	}
 
 	/**
+	 * Probe local models that have no configured context window. Only awaits when
+	 * something is pending, so setups without local models keep their timing.
+	 */
+	private async _resolvePendingLocalContextWindows(): Promise<void> {
+		if (!this._modelRegistry.hasPendingLocalContextWindows()) return;
+		for (const message of await this._modelRegistry.resolveLocalContextWindows()) {
+			this._emit({ type: "model_notice", message });
+		}
+	}
+
+	/**
 	 * Whether a dispatched turn is still in flight: streaming, retrying with
 	 * backoff, compacting before a continuation, an overflow recovery or
 	 * provider wait still settling, or a post-compaction continuation that
@@ -4105,7 +4118,10 @@ export class AgentSession {
 				}
 				const preparation = prepareCompaction(
 					this.sessionManager.getBranch(),
-					this.settingsManager.getCompactionSettings(),
+					clampCompactionSettings(
+						this.settingsManager.getCompactionSettings(),
+						this._runModel()?.contextWindow ?? 0,
+					),
 				);
 				if (!preparation) {
 					const lastEntry = this.sessionManager.getBranch().at(-1);
@@ -6081,6 +6097,7 @@ export class AgentSession {
 		// (the routing decision for this turn's images may already be made).
 		this._promptSubmissionInFlight = true;
 		try {
+			await this._resolvePendingLocalContextWindows();
 			return await this._promptInner(text, options);
 		} finally {
 			this._promptSubmissionInFlight = false;
@@ -8454,6 +8471,8 @@ export class AgentSession {
 	}
 
 	async setModel(model: Model<any>, options: ModelSelectOptions = {}): Promise<void> {
+		this._modelRegistry.resetLocalContextProbe(model);
+		await this._resolvePendingLocalContextWindows();
 		// Explicit selection recovers from a stale-auth lockout, but only a fully
 		// validated switch commits the clear (single owner): failed selections never unlock.
 		const staleOnly =
@@ -8939,7 +8958,7 @@ export class AgentSession {
 	}): Promise<CompactionResult> {
 		const { model, apiKey, headers, customInstructions, signal } = options;
 		const pathEntries = this.sessionManager.getBranch();
-		const settings = this.settingsManager.getCompactionSettings();
+		const settings = clampCompactionSettings(this.settingsManager.getCompactionSettings(), model.contextWindow);
 
 		const preparation = prepareCompaction(pathEntries, settings);
 		if (!preparation) {

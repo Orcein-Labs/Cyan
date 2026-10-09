@@ -959,14 +959,15 @@ describe("AgentSession compaction", () => {
 		const harness = await createHarness({
 			tools: [createFauxIpythonTool(sessionRef)],
 			// Let a running goal continuation cross the threshold while staying below overflow.
+			// The 8_000 reserve is capped to a quarter of the 6_000 window (1_500), so the trigger is 4_500.
 			settings: { compaction: { enabled: true, reserveTokens: 8_000, keepRecentTokens: 1 } },
-			models: [{ id: "faux-1", contextWindow: 10_000 }],
+			models: [{ id: "faux-1", contextWindow: 6_000 }],
 			persistSession: true,
 			extensionFactories: [extensionCompaction()],
 		});
 		harnesses.push(harness);
 		sessionRef.current = harness.session;
-		const largeStep = "x".repeat(3_500);
+		const largeStep = "x".repeat(5_000);
 		harness.setResponses([
 			fauxAssistantMessage(`step one done, more to do ${largeStep}`),
 			fauxAssistantMessage(`step two done, still more to do ${largeStep}`),

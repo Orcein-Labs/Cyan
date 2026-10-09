@@ -6,6 +6,7 @@ import { join } from "path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type CompactionSettings,
+	clampCompactionSettings,
 	compact,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
@@ -163,6 +164,49 @@ describe("shouldCompact", () => {
 		["the context window is unknown", settings, 95000, 0, false],
 	])("returns %s => %s when %s", (_label, config, contextTokens, contextWindow, expected) => {
 		expect(shouldCompact(contextTokens, contextWindow, config)).toBe(expected);
+	});
+});
+
+describe("small context windows", () => {
+	const defaults: CompactionSettings = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 };
+
+	it.each([
+		["4k", 4096, { reserveTokens: 1024, keepRecentTokens: 1024 }],
+		["8k", 8192, { reserveTokens: 2048, keepRecentTokens: 2048 }],
+		["32k", 32768, { reserveTokens: 8192, keepRecentTokens: 8192 }],
+		["128k", 128000, { reserveTokens: 16384, keepRecentTokens: 20000 }],
+	])("caps the budgets at a quarter of a %s window", (_label, contextWindow, expected) => {
+		expect(clampCompactionSettings(defaults, contextWindow)).toEqual({ ...defaults, ...expected });
+	});
+
+	it("leaves the defaults unchanged from 80k up, where both budgets already fit a quarter of the window", () => {
+		expect(clampCompactionSettings(defaults, 81920)).toEqual(defaults);
+		expect(clampCompactionSettings(defaults, 65536)).toEqual({ ...defaults, keepRecentTokens: 16384 });
+	});
+
+	it("never produces a reserve larger than the window", () => {
+		const clamped = clampCompactionSettings({ ...defaults, reserveTokens: 50000 }, 4096);
+		expect(clamped.reserveTokens).toBe(1024);
+		expect(clamped.reserveTokens).toBeLessThan(4096);
+	});
+
+	it("returns the settings untouched when the window is unknown", () => {
+		expect(clampCompactionSettings(defaults, 0)).toBe(defaults);
+	});
+
+	it.each([
+		["4k", 4096, 3071, 3073],
+		["8k", 8192, 6143, 6145],
+		["32k", 32768, 24575, 24577],
+		["128k", 128000, 111615, 111617],
+	])("fires only above the clamped threshold in a %s window", (_label, contextWindow, below, above) => {
+		expect(shouldCompact(below, contextWindow, defaults)).toBe(false);
+		expect(shouldCompact(above, contextWindow, defaults)).toBe(true);
+	});
+
+	it("does not fire on a small context when the reserve is larger than the window", () => {
+		const oversized = { ...defaults, reserveTokens: 16384 };
+		expect(shouldCompact(500, 4096, oversized)).toBe(false);
 	});
 });
 
