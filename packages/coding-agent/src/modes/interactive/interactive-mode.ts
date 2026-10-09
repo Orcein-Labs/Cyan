@@ -5923,6 +5923,10 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "model_notice":
+				this.showWarning(event.message);
+				break;
+
 			case "session_info_changed":
 				this.updateTerminalTitle();
 				this.refreshTopBarCostThrottled();

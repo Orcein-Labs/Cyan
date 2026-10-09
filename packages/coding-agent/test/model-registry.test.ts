@@ -7,6 +7,7 @@ import { getOAuthProvider, registerOAuthProvider } from "@earendil-works/pi-ai/o
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { getBundledModels } from "../src/core/bundled-model-catalog.js";
+import { clearLocalContextWindowCache } from "../src/core/local-context-window.js";
 import { ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.js";
 
 describe("ModelRegistry", () => {
@@ -1292,5 +1293,129 @@ describe("issue #702 codex model discovery client version", () => {
 		// 0.153.x is the floor at which ChatGPT discovery lists GPT-6 Astra (discussion #2062).
 		expect((major ?? 0) > 0 || (minor ?? 0) >= 153).toBe(true);
 		expect(executable.some((model) => model.provider === "openai-codex")).toBe(true);
+	});
+});
+
+describe("ModelRegistry local OpenAI-compatible models", () => {
+	let tempDir: string;
+	let modelsJsonPath: string;
+
+	beforeEach(() => {
+		clearLocalContextWindowCache();
+		tempDir = join(tmpdir(), `pi-test-local-models-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+		modelsJsonPath = join(tempDir, "models.json");
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		if (tempDir && existsSync(tempDir)) {
+			rmSync(tempDir, { recursive: true });
+		}
+	});
+
+	function writeLocalProvider(baseUrl: string, model: Record<string, unknown>, apiKey?: string) {
+		writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					llama: {
+						baseUrl,
+						api: "openai-completions",
+						...(apiKey ? { apiKey } : {}),
+						models: [{ id: "qwen", ...model }],
+					},
+				},
+			}),
+		);
+	}
+
+	function stubFetch(handler: (url: string) => Response | Promise<Response>) {
+		const fetchMock = vi.fn(async (input: string) => handler(input));
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	const propsResponse = (nCtx: number) =>
+		new Response(JSON.stringify({ default_generation_settings: { n_ctx: nCtx } }), { status: 200 });
+
+	test("replaces the fallback window with the server's n_ctx on resolve", async () => {
+		writeLocalProvider("http://127.0.0.1:8080/v1", {});
+		const fetchMock = stubFetch((url) => {
+			if (url === "http://127.0.0.1:8080/props") return propsResponse(32768);
+			throw new TypeError("unexpected");
+		});
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		const model = registry.find("llama", "qwen");
+
+		expect(model?.contextWindow).toBe(8192);
+		expect(registry.hasPendingLocalContextWindows()).toBe(true);
+
+		expect(await registry.resolveLocalContextWindows()).toEqual([]);
+		expect(model?.contextWindow).toBe(32768);
+		expect(registry.hasPendingLocalContextWindows()).toBe(false);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("keeps a user-configured contextWindow and never probes it", async () => {
+		writeLocalProvider("http://127.0.0.1:8080/v1", { contextWindow: 65536 });
+		const fetchMock = stubFetch(() => propsResponse(4096));
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+
+		expect(registry.hasPendingLocalContextWindows()).toBe(false);
+		expect(await registry.resolveLocalContextWindows()).toEqual([]);
+		expect(registry.find("llama", "qwen")?.contextWindow).toBe(65536);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	test("keeps the fallback when the probe fails and warns once", async () => {
+		writeLocalProvider("http://127.0.0.1:8080/v1", {});
+		const fetchMock = stubFetch(() => {
+			throw new TypeError("fetch failed: ECONNREFUSED");
+		});
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		const model = registry.find("llama", "qwen");
+
+		const first = await registry.resolveLocalContextWindows();
+		expect(first).toHaveLength(1);
+		expect(first[0]).toContain('"llama/qwen"');
+		expect(first[0]).toContain("Assuming 8192 tokens");
+		expect(first[0]).toContain("models.json");
+		expect(model?.contextWindow).toBe(8192);
+
+		expect(await registry.resolveLocalContextWindows()).toEqual([]);
+		expect(registry.hasPendingLocalContextWindows()).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+	});
+
+	test("keeps a keyless local model visible and sends a placeholder bearer token", async () => {
+		writeLocalProvider("http://127.0.0.1:8080/v1", { contextWindow: 16384 });
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		const model = registry.find("llama", "qwen");
+		if (!model) throw new Error("model not registered");
+
+		expect(registry.hasConfiguredAuth(model)).toBe(true);
+		expect(registry.getAvailable().some((m) => m.provider === "llama" && m.id === "qwen")).toBe(true);
+
+		const auth = await registry.getApiKeyAndHeaders(model);
+		expect(auth).toMatchObject({ ok: true, apiKey: "local" });
+	});
+
+	test("rejects a keyless custom provider on a public host with a visible error", () => {
+		writeLocalProvider("https://api.example.com/v1", { contextWindow: 16384 });
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+
+		expect(registry.getError()).toContain('"apiKey" is required when defining custom models');
+		expect(registry.find("llama", "qwen")).toBeUndefined();
+	});
+
+	test("does not replace a configured apiKey with the placeholder", async () => {
+		writeLocalProvider("http://127.0.0.1:8080/v1", { contextWindow: 16384 }, "LOCAL_TEST_TOKEN");
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		const model = registry.find("llama", "qwen");
+		if (!model) throw new Error("model not registered");
+
+		const auth = await registry.getApiKeyAndHeaders(model);
+		expect(auth).toMatchObject({ ok: true, apiKey: "LOCAL_TEST_TOKEN" });
 	});
 });

@@ -33,6 +33,12 @@ import { writeFileAtomicSync } from "../utils/atomic-file.js";
 import type { AuthSourceToken, AuthStatus, AuthStorage } from "./auth-storage.js";
 import { getBundledModels } from "./bundled-model-catalog.js";
 import { refreshDefaultModelCatalog } from "./default-model-catalog.js";
+import {
+	isLocalBaseUrl,
+	LOCAL_CONTEXT_WINDOW_FALLBACK,
+	LOCAL_KEYLESS_API_KEY,
+	probeLocalContextWindow,
+} from "./local-context-window.js";
 import { CATALOG_REFRESH_INTERVAL_MS, CatalogCache, isCatalogOffline } from "./model-catalog-cache.js";
 import { PRIME_INFERENCE_PROVIDER_ID } from "./prime-inference-auth.js";
 import {
@@ -451,6 +457,11 @@ function isOfflineModeEnabled(): boolean {
 export class ModelRegistry {
 	private readonly bundledCatalogModels = getBundledModels();
 	private models: Model<Api>[] = [];
+	/** Local models whose context window is still the fallback, pending a server probe. */
+	private pendingLocalContextModels = new WeakSet<Model<Api>>();
+	private warnedLocalContextModels = new Set<string>();
+	/** Providers from models.json that define models with no apiKey, on a local host. */
+	private keylessLocalProviders = new Set<string>();
 	private xaiModelSources = new WeakMap<Model<Api>, Model<Api>>();
 	private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
 	private staleProviderRequestAuthSources: Map<string, AuthSourceToken[]> = new Map();
@@ -513,6 +524,7 @@ export class ModelRegistry {
 	 */
 	refresh(): void {
 		this.providerRequestConfigs.clear();
+		this.keylessLocalProviders.clear();
 		this.modelRequestHeaders.clear();
 		this.lastProviderAuthSourceTokens.clear();
 		this.explicitPrivatePrimeInferenceModelIds.clear();
@@ -707,6 +719,14 @@ export class ModelRegistry {
 				}
 
 				this.storeProviderRequestConfig(providerName, providerConfig);
+				if (
+					!providerConfig.apiKey &&
+					(providerConfig.models?.length ?? 0) > 0 &&
+					!getProviders().includes(providerName as KnownProvider) &&
+					isLocalBaseUrl(providerConfig.baseUrl)
+				) {
+					this.keylessLocalProviders.add(providerName);
+				}
 
 				if (providerConfig.modelOverrides) {
 					modelOverrides.set(providerName, new Map(Object.entries(providerConfig.modelOverrides)));
@@ -747,7 +767,7 @@ export class ModelRegistry {
 				if (!providerConfig.baseUrl) {
 					throw new Error(`Provider ${providerName}: "baseUrl" is required when defining custom models.`);
 				}
-				if (!providerConfig.apiKey) {
+				if (!providerConfig.apiKey && !isLocalBaseUrl(providerConfig.baseUrl)) {
 					throw new Error(`Provider ${providerName}: "apiKey" is required when defining custom models.`);
 				}
 			}
@@ -802,8 +822,14 @@ export class ModelRegistry {
 				const compat = mergeCompat(providerConfig.compat, modelDef.compat);
 				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
+				const probeContextWindow =
+					modelDef.contextWindow === undefined &&
+					api === "openai-completions" &&
+					!builtInProviders.has(providerName) &&
+					isLocalBaseUrl(baseUrl);
+
 				const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-				models.push({
+				const model = {
 					id: modelDef.id,
 					name: modelDef.name ?? modelDef.id,
 					api: api as Api,
@@ -813,15 +839,49 @@ export class ModelRegistry {
 					thinkingLevelMap: modelDef.thinkingLevelMap,
 					input: (modelDef.input ?? ["text"]) as ("text" | "image")[],
 					cost: modelDef.cost ?? defaultCost,
-					contextWindow: modelDef.contextWindow ?? 128000,
+					contextWindow: modelDef.contextWindow ?? (probeContextWindow ? LOCAL_CONTEXT_WINDOW_FALLBACK : 128000),
 					maxTokens: modelDef.maxTokens ?? 16384,
 					headers: undefined,
 					compat,
-				} as Model<Api>);
+				} as Model<Api>;
+				if (probeContextWindow) this.pendingLocalContextModels.add(model);
+				models.push(model);
 			}
 		}
 
 		return models;
+	}
+
+	hasPendingLocalContextWindows(): boolean {
+		return this.models.some((model) => this.pendingLocalContextModels.has(model));
+	}
+
+	/**
+	 * Replace the fallback context window of local models with the server's own
+	 * value, when the user did not configure one. Call before a turn runs.
+	 * A model whose probe fails stays on the fallback and is probed again on the
+	 * next call. Returns a warning the first time each model fails.
+	 */
+	async resolveLocalContextWindows(): Promise<string[]> {
+		const warnings: string[] = [];
+		for (const model of this.models) {
+			if (!this.pendingLocalContextModels.has(model)) continue;
+			const probe = await probeLocalContextWindow({ baseUrl: model.baseUrl, modelId: model.id });
+			if ("error" in probe) {
+				const key = `${model.provider}/${model.id}`;
+				if (!this.warnedLocalContextModels.has(key)) {
+					this.warnedLocalContextModels.add(key);
+					warnings.push(
+						`Could not read the context window of local model "${key}" at ${model.baseUrl} (${probe.error}). ` +
+							`Assuming ${LOCAL_CONTEXT_WINDOW_FALLBACK} tokens. Set "contextWindow" for this model in models.json.`,
+					);
+				}
+				continue;
+			}
+			model.contextWindow = probe.contextWindow;
+			this.pendingLocalContextModels.delete(model);
+		}
+		return warnings;
 	}
 
 	/**
@@ -1299,7 +1359,23 @@ export class ModelRegistry {
 	 * Get API key for a model.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
-		return this.authStorage.hasAuth(model.provider) || this.hasConfiguredProviderRequestAuth(model.provider);
+		return (
+			this.authStorage.hasAuth(model.provider) ||
+			this.hasConfiguredProviderRequestAuth(model.provider) ||
+			this.isKeylessLocalModel(model)
+		);
+	}
+
+	/**
+	 * A models.json provider on this machine or the LAN with no apiKey. llama-server
+	 * and Ollama need no key, so these models stay visible and send a placeholder
+	 * bearer token. validateConfig() accepts the same providers. Runtime-registered
+	 * providers are not affected.
+	 */
+	private isKeylessLocalModel(model: Model<Api>): boolean {
+		if (!this.keylessLocalProviders.has(model.provider)) return false;
+		if (this.providerRequestConfigs.get(model.provider)?.apiKey) return false;
+		return isLocalBaseUrl(model.baseUrl);
 	}
 
 	private fingerprintProviderRequestAuthSource(source: ProviderRequestAuthSource["source"], material: string): string {
@@ -1625,6 +1701,10 @@ export class ModelRegistry {
 				this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
 				`model "${model.provider}/${model.id}"`,
 			);
+
+			if (apiKey === undefined && this.isKeylessLocalModel(model)) {
+				apiKey = LOCAL_KEYLESS_API_KEY;
+			}
 
 			let headers =
 				model.headers || authStorageHeaders || providerHeaders || modelHeaders
