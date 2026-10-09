@@ -38,7 +38,18 @@ export type LocalContextWindowProbe = LocalContextWindowResult | LocalContextWin
 
 type FetchLike = (input: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 
+/**
+ * How long a failed probe is remembered. A server without /props (Ollama, vLLM)
+ * never gains one, so this bounds the retry cost to one two-request probe per
+ * window, not one per prompt. Ten minutes is the compromise: at a minute, a
+ * dead server still adds up to 4 s to a prompt every minute; at an hour, a
+ * llama-server started after Cyan stays on the fallback for an hour. A model
+ * switch or a config reload clears the entry, so the user never waits out the TTL.
+ */
+export const LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS = 10 * 60 * 1000;
+
 const successfulProbes = new Map<string, LocalContextWindowResult>();
+const failedProbes = new Map<string, { error: string; expiresAt: number }>();
 
 /**
  * True when the URL points at this machine or a private (RFC 1918) IPv4 network.
@@ -95,8 +106,11 @@ async function getJson(url: string, fetchImpl: FetchLike, timeoutMs: number): Pr
  * divided by N. Router-mode servers report 0 there, so `/v1/models` is tried
  * next, reading `data[].meta.n_ctx` from the entry matching the model id.
  *
- * Results are cached per server root and model id. Failures are not cached, so
- * a server that starts later is picked up on the next attempt.
+ * A success is cached per server root and model id for the life of the process.
+ * A failure is negative-cached for LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS: within that
+ * window the call returns the stored error without any network request.
+ * `forgetLocalContextProbeFailure` and `forgetAllLocalContextProbeFailures` clear
+ * it early.
  */
 export async function probeLocalContextWindow(options: {
 	baseUrl: string;
@@ -108,6 +122,8 @@ export async function probeLocalContextWindow(options: {
 	const cacheKey = `${root}\0${options.modelId}`;
 	const cached = successfulProbes.get(cacheKey);
 	if (cached) return cached;
+	const failed = failedProbes.get(cacheKey);
+	if (failed && Date.now() < failed.expiresAt) return { error: failed.error };
 
 	const fetchImpl: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
 	const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
@@ -146,7 +162,20 @@ export async function probeLocalContextWindow(options: {
 		failures.push(`/v1/models: ${describeError(error)}`);
 	}
 
-	return { error: failures.join("; ") };
+	const error = failures.join("; ");
+	failedProbes.set(cacheKey, { error, expiresAt: Date.now() + LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS });
+	return { error };
+}
+
+/** Let the next probe for this server and model reach the network again. */
+export function forgetLocalContextProbeFailure(baseUrl: string | undefined, modelId: string): void {
+	if (!baseUrl) return;
+	failedProbes.delete(`${serverRoot(baseUrl)}\0${modelId}`);
+}
+
+/** Let every model's next probe reach the network again (config reload). */
+export function forgetAllLocalContextProbeFailures(): void {
+	failedProbes.clear();
 }
 
 function describeError(error: unknown): string {
@@ -156,7 +185,8 @@ function describeError(error: unknown): string {
 	return String(error);
 }
 
-/** Test hook: forget cached probe results. */
+/** Test hook: forget every cached success and failure. */
 export function clearLocalContextWindowCache(): void {
 	successfulProbes.clear();
+	failedProbes.clear();
 }

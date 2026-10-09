@@ -7,7 +7,7 @@ import { getOAuthProvider, registerOAuthProvider } from "@earendil-works/pi-ai/o
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { getBundledModels } from "../src/core/bundled-model-catalog.js";
-import { clearLocalContextWindowCache } from "../src/core/local-context-window.js";
+import { clearLocalContextWindowCache, LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS } from "../src/core/local-context-window.js";
 import { ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.js";
 
 describe("ModelRegistry", () => {
@@ -1308,6 +1308,7 @@ describe("ModelRegistry local OpenAI-compatible models", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.unstubAllGlobals();
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true });
@@ -1385,7 +1386,107 @@ describe("ModelRegistry local OpenAI-compatible models", () => {
 
 		expect(await registry.resolveLocalContextWindows()).toEqual([]);
 		expect(registry.hasPendingLocalContextWindows()).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	test("a failing probe on prompt 1 makes no network calls on prompts 2..N within the TTL", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-10-08T12:00:00Z"));
+		writeLocalProvider("http://127.0.0.1:8080/v1", {});
+		const fetchMock = stubFetch(() => {
+			throw new TypeError("fetch failed: ECONNREFUSED");
+		});
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+
+		const warnings = [await registry.resolveLocalContextWindows()];
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		for (let prompt = 2; prompt <= 6; prompt++) {
+			vi.setSystemTime(new Date(Date.parse("2026-10-08T12:00:00Z") + prompt * 60_000));
+			warnings.push(await registry.resolveLocalContextWindows());
+		}
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(warnings.slice(1).every((w) => w.length === 0)).toBe(true);
+		expect(warnings[0]).toHaveLength(1);
+	});
+
+	test("after the TTL, a failing model probes once and does not warn again", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const start = Date.parse("2026-10-08T12:00:00Z");
+		vi.setSystemTime(start);
+		writeLocalProvider("http://127.0.0.1:8080/v1", {});
+		const fetchMock = stubFetch(() => {
+			throw new TypeError("fetch failed: ECONNREFUSED");
+		});
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		await registry.resolveLocalContextWindows();
+
+		vi.setSystemTime(start + LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS);
+		expect(await registry.resolveLocalContextWindows()).toEqual([]);
 		expect(fetchMock).toHaveBeenCalledTimes(4);
+
+		await registry.resolveLocalContextWindows();
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+	});
+
+	test("resetLocalContextProbe (explicit model selection) lets the next resolve probe exactly once", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-10-08T12:00:00Z"));
+		writeLocalProvider("http://127.0.0.1:8080/v1", {});
+		const fetchMock = stubFetch(() => {
+			throw new TypeError("fetch failed: ECONNREFUSED");
+		});
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		const model = registry.find("llama", "qwen");
+		if (!model) throw new Error("model not registered");
+		await registry.resolveLocalContextWindows();
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		registry.resetLocalContextProbe(model);
+		await registry.resolveLocalContextWindows();
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+
+		await registry.resolveLocalContextWindows();
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+	});
+
+	test("a config reload (refresh) clears the negative cache, so the next resolve probes once", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-10-08T12:00:00Z"));
+		writeLocalProvider("http://127.0.0.1:8080/v1", {});
+		const fetchMock = stubFetch(() => {
+			throw new TypeError("fetch failed: ECONNREFUSED");
+		});
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		await registry.resolveLocalContextWindows();
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		registry.refresh();
+		await registry.resolveLocalContextWindows();
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+
+		await registry.resolveLocalContextWindows();
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+	});
+
+	test("a successful probe stays cached across prompts and the TTL", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const start = Date.parse("2026-10-08T12:00:00Z");
+		vi.setSystemTime(start);
+		writeLocalProvider("http://127.0.0.1:8080/v1", {});
+		const fetchMock = stubFetch((url) => {
+			if (url === "http://127.0.0.1:8080/props") return propsResponse(32768);
+			throw new TypeError("unexpected");
+		});
+		const registry = ModelRegistry.create(AuthStorage.create(join(tempDir, "auth.json")), modelsJsonPath);
+		const model = registry.find("llama", "qwen");
+
+		await registry.resolveLocalContextWindows();
+		vi.setSystemTime(start + 3 * LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS);
+		await registry.resolveLocalContextWindows();
+
+		expect(model?.contextWindow).toBe(32768);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	test("keeps a keyless local model visible and sends a placeholder bearer token", async () => {

@@ -34,6 +34,8 @@ import type { AuthSourceToken, AuthStatus, AuthStorage } from "./auth-storage.js
 import { getBundledModels } from "./bundled-model-catalog.js";
 import { refreshDefaultModelCatalog } from "./default-model-catalog.js";
 import {
+	forgetAllLocalContextProbeFailures,
+	forgetLocalContextProbeFailure,
 	isLocalBaseUrl,
 	LOCAL_CONTEXT_WINDOW_FALLBACK,
 	LOCAL_KEYLESS_API_KEY,
@@ -525,6 +527,7 @@ export class ModelRegistry {
 	refresh(): void {
 		this.providerRequestConfigs.clear();
 		this.keylessLocalProviders.clear();
+		forgetAllLocalContextProbeFailures();
 		this.modelRequestHeaders.clear();
 		this.lastProviderAuthSourceTokens.clear();
 		this.explicitPrivatePrimeInferenceModelIds.clear();
@@ -850,6 +853,11 @@ export class ModelRegistry {
 		}
 
 		return models;
+	}
+
+	/** Explicit model selection: let this model's next probe reach the network again. */
+	resetLocalContextProbe(model: Model<Api>): void {
+		forgetLocalContextProbeFailure(model.baseUrl, model.id);
 	}
 
 	hasPendingLocalContextWindows(): boolean {

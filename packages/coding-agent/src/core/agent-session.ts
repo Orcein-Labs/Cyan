@@ -8471,6 +8471,7 @@ export class AgentSession {
 	}
 
 	async setModel(model: Model<any>, options: ModelSelectOptions = {}): Promise<void> {
+		this._modelRegistry.resetLocalContextProbe(model);
 		await this._resolvePendingLocalContextWindows();
 		// Explicit selection recovers from a stale-auth lockout, but only a fully
 		// validated switch commits the clear (single owner): failed selections never unlock.

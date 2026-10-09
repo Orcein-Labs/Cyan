@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clearLocalContextWindowCache,
+	forgetLocalContextProbeFailure,
 	isLocalBaseUrl,
+	LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS,
 	LOCAL_CONTEXT_WINDOW_FALLBACK,
 	probeLocalContextWindow,
 } from "../src/core/local-context-window.js";
@@ -161,18 +163,88 @@ describe("probeLocalContextWindow", () => {
 		expect(fetchImpl).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not cache a failure, so a server that starts later is found", async () => {
-		const routes: Record<string, Route> = {};
-		const { fetchImpl } = stubServer(routes);
+	describe("failure negative cache", () => {
+		const START = new Date("2026-10-08T12:00:00Z");
 
-		expect("error" in (await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl }))).toBe(
-			true,
-		);
+		beforeEach(() => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(START);
+		});
 
-		routes[`${ROOT}/props`] = { body: { default_generation_settings: { n_ctx: 4096 } } };
-		const retry = await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+		afterEach(() => {
+			vi.useRealTimers();
+		});
 
-		expect(retry).toEqual({ contextWindow: 4096, source: "llama-server /props" });
+		it("makes no network call within the TTL after a failure", async () => {
+			const { fetchImpl } = stubServer({});
+			const first = await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+			expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+			vi.setSystemTime(new Date(START.getTime() + LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS - 1));
+			const second = await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+
+			expect(second).toEqual(first);
+			expect(fetchImpl).toHaveBeenCalledTimes(2);
+		});
+
+		it("probes exactly once when the TTL has passed, then negative-caches again", async () => {
+			const { fetchImpl } = stubServer({});
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+
+			vi.setSystemTime(new Date(START.getTime() + LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS));
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+			expect(fetchImpl).toHaveBeenCalledTimes(4);
+
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+			expect(fetchImpl).toHaveBeenCalledTimes(4);
+		});
+
+		it("finds a server that started after the failure once the TTL has passed", async () => {
+			const routes: Record<string, Route> = {};
+			const { fetchImpl } = stubServer(routes);
+			expect("error" in (await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl }))).toBe(
+				true,
+			);
+
+			routes[`${ROOT}/props`] = { body: { default_generation_settings: { n_ctx: 4096 } } };
+			vi.setSystemTime(new Date(START.getTime() + LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS));
+			const retry = await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+
+			expect(retry).toEqual({ contextWindow: 4096, source: "llama-server /props" });
+		});
+
+		it("lets the next probe through after forgetLocalContextProbeFailure", async () => {
+			const { fetchImpl } = stubServer({});
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+
+			forgetLocalContextProbeFailure(BASE, "qwen");
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+			expect(fetchImpl).toHaveBeenCalledTimes(4);
+		});
+
+		it("keys the cache per model: forgetting one model leaves another negative-cached", async () => {
+			const { fetchImpl } = stubServer({});
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "llama", fetch: fetchImpl });
+			expect(fetchImpl).toHaveBeenCalledTimes(4);
+
+			forgetLocalContextProbeFailure(BASE, "qwen");
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "llama", fetch: fetchImpl });
+			expect(fetchImpl).toHaveBeenCalledTimes(4);
+		});
+
+		it("keeps a success cached after the TTL, with no further network call", async () => {
+			const { fetchImpl } = stubServer({
+				[`${ROOT}/props`]: { body: { default_generation_settings: { n_ctx: 65536 } } },
+			});
+			await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+
+			vi.setSystemTime(new Date(START.getTime() + 10 * LOCAL_CONTEXT_PROBE_FAILURE_TTL_MS));
+			const later = await probeLocalContextWindow({ baseUrl: BASE, modelId: "qwen", fetch: fetchImpl });
+
+			expect(later).toEqual({ contextWindow: 65536, source: "llama-server /props" });
+			expect(fetchImpl).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	it("keeps the fallback constant at 8192", () => {
