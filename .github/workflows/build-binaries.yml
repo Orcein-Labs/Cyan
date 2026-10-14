@@ -196,7 +196,7 @@ jobs:
         run: npm run check
 
       - name: Download tested standalone archives
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: standalone-*
           path: standalone-artifacts
@@ -331,20 +331,20 @@ jobs:
 
       - name: Download exact final production artifacts
         if: env.PUBLISH_PRODUCTION == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: prime-agent-production
           path: ${{ runner.temp }}/final-artifacts/prime-agent-production
 
       - name: Download exact final beta artifacts
         if: env.PUBLISH_BETA == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: prime-agent-beta
           path: ${{ runner.temp }}/final-artifacts/prime-agent-beta
 
       - name: Download tested executable identity
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: standalone-${{ matrix.platform }}
           path: ${{ runner.temp }}/standalone-reference
@@ -404,20 +404,20 @@ jobs:
 
       - name: Download production artifacts
         if: env.PUBLISH_PRODUCTION == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: prime-agent-production
           path: release-artifacts/production
 
       - name: Download beta artifacts
         if: env.PUBLISH_BETA == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: prime-agent-beta
           path: release-artifacts/beta
 
       - name: Download native validation receipts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: macos-validation-*
           path: macos-validation
